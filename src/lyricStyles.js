@@ -245,8 +245,8 @@ function glitch(ctx, { p, t, size, k, pi, sc, words }) {
 // ---- Акцент: одно слово крупно в центре экрана ----
 // Ударные слова — тёмно-красные и «берут текстуру карты»: их рисуем на слое умножения (mul, белый фон),
 // ffmpeg перемножает его с видео, и сквозь буквы видны стены и пол. В превью слоя нет — там то же
-// самое даёт режим наложения multiply прямо на картинке. Обычные слова — округлым шрифтом, белые,
-// со свечением, световым пятном и лучами, будто подсвечивают карту.
+// самое даёт режим наложения multiply прямо на картинке. Обычные слова — округлым шрифтом, белые
+// и светятся.
 const WHITE_FONT = (px) => `800 ${px}px "Rubik", "Segoe UI", sans-serif`;
 
 function letterStates(ctx, text, enter, seed) {
@@ -303,35 +303,13 @@ function redWord(ctx, mul, text, { fs, k, alpha, enter, seed, maxW }) {
   target.restore();
 }
 
-function whiteWord(ctx, text, { fs, k, alpha, enter, seed, maxW, t }) {
+function whiteWord(ctx, text, { fs, k, alpha, enter, seed, maxW }) {
   ctx.save();
   ctx.font = WHITE_FONT(fs);
   const { w0, letters } = letterStates(ctx, text, enter, seed);
   const fit = Math.min(1, maxW / Math.max(w0, 1));
   const punch = 1 + 0.1 * (1 - clamp01(enter / 0.16));
   ctx.scale(fit * punch, fit * punch);
-  const glow = alpha * clamp01(enter / 0.15);
-  // свет: мягкое пятно и тонкие лучи из-за слова, медленно поворачиваются
-  ctx.save();
-  ctx.globalAlpha = glow;
-  const R = w0 * 0.75;
-  const spot = ctx.createRadialGradient(0, 0, 0, 0, 0, R);
-  spot.addColorStop(0, "rgba(255,244,228,.30)"); spot.addColorStop(0.5, "rgba(255,240,220,.12)"); spot.addColorStop(1, "rgba(255,240,220,0)");
-  ctx.fillStyle = spot;
-  ctx.beginPath(); ctx.ellipse(0, 0, R, R * 0.55, 0, 0, Math.PI * 2); ctx.fill();
-  for (let r = 0; r < 10; r++) {
-    const ang = (r / 10) * Math.PI * 2 + t * 0.25 + rnd(seed + r) * 0.4;
-    const len = R * (1.1 + rnd(seed + r + 20) * 0.7), wid = 0.05 + rnd(seed + r + 40) * 0.05;
-    const ray = ctx.createLinearGradient(0, 0, Math.cos(ang) * len, Math.sin(ang) * len);
-    ray.addColorStop(0, "rgba(255,246,232,.16)"); ray.addColorStop(1, "rgba(255,246,232,0)");
-    ctx.fillStyle = ray;
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(Math.cos(ang - wid) * len, Math.sin(ang - wid) * len * 0.6);
-    ctx.lineTo(Math.cos(ang + wid) * len, Math.sin(ang + wid) * len * 0.6);
-    ctx.closePath(); ctx.fill();
-  }
-  ctx.restore();
   // буквы: два прохода свечения и чистая белая сторона
   eachLetter(ctx, letters, alpha, (l) => {
     ctx.fillStyle = "#ffffff";

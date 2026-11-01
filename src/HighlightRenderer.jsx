@@ -9,7 +9,7 @@ import { parseDemo } from "./demo";
 import { tierOf, tagLabel } from "./moments";
 import { fontsReady, renderHudFrames } from "./hud";
 import { SkinsPanel, planForRust, planIsEmpty } from "./skins";
-import { MusicPanel, MUSIC_DEFAULT, renderLyricFrames, chorusDrops, alignChorusToKill } from "./music";
+import { MusicPanel, MUSIC_DEFAULT, renderLyricFrames, chorusDrops, alignChorusToKill, chainMusic } from "./music";
 import { orbitPath } from "./cine";
 import { lyricStyle } from "./lyricStyles";
 import { MatchDossier, infoSummary, mapName, mapTint } from "./dossier";
@@ -736,6 +736,12 @@ const voicePayload = useMemo(() => {
           c.cine = { kill, victimSlot: victims.at(-1)?.slot ?? null, victims, orbitXml: orbit?.xml ?? null, orbitEnd: orbit?.end ?? null };
         });
         stopped();
+      }
+      // Клипы склеиваются в один ролик — песня идёт через них подряд, без перескоков назад
+      // (длина клипа известна только теперь: в неё входят повторы глазами жертв)
+      if (merge.on && sel.length >= 2 && music.enabled && music.path) {
+        chainMusic({ clips: sel, lrc: music.lrc, start: music.start, slowmo: fx.slowmo,
+          chorusSlow: !!music.chorusSlow, chorusOnKill: music.chorusOnKill !== false });
       }
       // Текст песни: кадры на каждый клип (папки lyr_N), накладываются после slow-mo
       const withMusic = music.enabled && music.path;

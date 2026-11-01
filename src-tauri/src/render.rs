@@ -43,6 +43,11 @@ pub struct Clip {
     // тики киллов в голову — там «зум на хедшот»
     #[serde(default)]
     pub hs_ticks: Vec<u32>,
+    // трек плавно появляется / уходит в этом клипе (в ролике из нескольких — только первый/последний)
+    #[serde(default)]
+    pub music_fade_in: Option<bool>,
+    #[serde(default)]
+    pub music_fade_out: Option<bool>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -142,6 +147,45 @@ pub struct Job {
     keep_parts: bool,
 }
 fn yes() -> bool { true }
+
+// Переход между клипами в ролике, секунды (тот же REEL_XFADE во фронтенде — на него сдвинут трек)
+const REEL_XFADE: f64 = 0.35;
+
+// Длина видео по выводу ffmpeg
+fn media_duration(ff: &Path, path: &Path) -> Option<f64> {
+    let mut cmd = Command::new(ff);
+    cmd.arg("-hide_banner").arg("-i").arg(path);
+    no_window(&mut cmd);
+    let out = cmd.output().ok()?;
+    let log = String::from_utf8_lossy(&out.stderr);
+    let t = log.split("Duration: ").nth(1)?.split(',').next()?;
+    Some(t.trim().split(':').filter_map(|x| x.parse::<f64>().ok()).fold(0.0, |acc, x| acc * 60.0 + x))
+}
+
+// Ролик из клипов с коротким переходом «рывок вбок» (xfade smoothleft) и перекрёстным звуком.
+// Видео пережимается (переход — новые кадры), поэтому кодировщик тот же, что у клипов.
+fn reel_with_transitions(ff: &Path, parts: &[PathBuf], dst: &Path, enc: Option<&str>, crf: u32) -> bool {
+    let Some(durs) = parts.iter().map(|p| media_duration(ff, p)).collect::<Option<Vec<f64>>>() else { return false };
+    if durs.iter().any(|d| *d <= REEL_XFADE * 2.0) { return false; }
+    let mut g = String::new();
+    let (mut v, mut a) = ("[0:v]".to_string(), "[0:a]".to_string());
+    let mut offset = 0.0;
+    for i in 1..parts.len() {
+        offset += durs[i - 1] - REEL_XFADE;
+        g += &format!("{v}[{i}:v]xfade=transition=smoothleft:duration={REEL_XFADE}:offset={offset:.3}[xv{i}];");
+        g += &format!("{a}[{i}:a]acrossfade=d={REEL_XFADE}[xa{i}];");
+        v = format!("[xv{i}]");
+        a = format!("[xa{i}]");
+    }
+    g.pop();
+    let mut cmd = Command::new(ff);
+    cmd.args(["-hide_banner", "-loglevel", "error", "-y"]);
+    for p in parts { cmd.arg("-i").arg(p); }
+    cmd.arg("-filter_complex").arg(&g).args(["-map", &v, "-map", &a]).args(codec_args(enc, crf))
+        .args(["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]).arg(dst);
+    no_window(&mut cmd);
+    cmd.status().map(|s| s.success()).unwrap_or(false) && dst.exists()
+}
 
 // Склейка готовых клипов в один ролик: у них одинаковые кодеки, разрешение и fps
 fn concat_clips(ff: &Path, parts: &[PathBuf], dst: &Path, list: &Path) -> bool {
@@ -303,15 +347,18 @@ fn flash_filter(kills: &[f64], color: &str, h: u32) -> Option<String> {
 }
 
 // Наезд камеры на строку текста: keys — [начало, конец, x, y] на итоговой шкале, x/y — доли кадра.
-// Плавно (0.5 с) приближаемся на 15% к точке строки, держим, плавно отпускаем.
+// За 0.35 с камера тянется на 12% к точке строки (сбоку от прицела): разгон к середине и короткое
+// торможение в конце, держит, так же отпускает. Строк с зумом немного — их выбирает фронтенд.
 fn text_zoom_filter(keys: &[[f64; 4]], w: u32, h: u32) -> Option<String> {
     if keys.is_empty() { return None; }
     // плавная ступенька 0..1..0 на отрезке [a, b]: st/ld — регистр выражения ffmpeg
-    let s = |a: f64, b: f64| format!("(st(0,clip(min((t-{a:.3})/0.5,({b:.3}-t)/0.5),0,1))*ld(0)*(3-2*ld(0)))");
+    let s = |a: f64, b: f64| format!(
+        "(st(0,clip(min((t-{a:.3})/0.35,({b:.3}-t)/0.35),0,1))*0+if(lt(ld(0),0.5),4*pow(ld(0),3),1-pow(2-2*ld(0),3)/2))"
+    );
     let env = keys.iter().map(|k| s(k[0], k[1])).collect::<Vec<_>>().join("+");
-    let px = keys.iter().map(|k| format!("{}*{:.4}", s(k[0], k[1]), (k[2] - 0.5) * 0.8)).collect::<Vec<_>>().join("+");
-    let py = keys.iter().map(|k| format!("{}*{:.4}", s(k[0], k[1]), (k[3] - 0.5) * 0.8)).collect::<Vec<_>>().join("+");
-    let z = format!("(1+0.15*min(1,{env}))");
+    let px = keys.iter().map(|k| format!("{}*{:.4}", s(k[0], k[1]), (k[2] - 0.5) * 0.9)).collect::<Vec<_>>().join("+");
+    let py = keys.iter().map(|k| format!("{}*{:.4}", s(k[0], k[1]), (k[3] - 0.5) * 0.9)).collect::<Vec<_>>().join("+");
+    let z = format!("(1+0.12*min(1,{env}))");
     Some(format!(
         "scale=w='trunc(iw*{z}/2)*2':h='trunc(ih*{z}/2)*2':eval=frame,\
          crop=w={w}:h={h}:x='clip((0.5+{px})*iw-ow/2,0,iw-ow)':y='clip((0.5+{py})*ih-oh/2,0,ih-oh)'"
@@ -984,10 +1031,9 @@ fn finish_take(j: &Job, ff: &Path, d: &Path, clip: &Clip, dst: &Path, hud_dir: O
     if let (Some(i), Some(m)) = (mus_idx, music) {
         let dur = out_duration(j, clip);
         let fade_at = (dur - 1.2).max(0.0);
-        filter += &format!(
-            ";[{i}:a]aresample=48000,volume={:.2},afade=t=in:d=0.8,afade=t=out:st={fade_at:.2}:d=1.2[mus]",
-            m.music_vol
-        );
+        let fade_in = if clip.music_fade_in.unwrap_or(true) { ",afade=t=in:d=0.8".to_string() } else { String::new() };
+        let fade_out = if clip.music_fade_out.unwrap_or(true) { format!(",afade=t=out:st={fade_at:.2}:d=1.2") } else { String::new() };
+        filter += &format!(";[{i}:a]aresample=48000,volume={:.2}{fade_in}{fade_out}[mus]", m.music_vol);
         if has_audio {
             // лимитер: трек и игра складываются, без него громкие места хрипят (пик упирался в 0 дБ)
             filter += &format!(";[a]aresample=48000,volume={:.2}[ga];[ga][mus]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.9:level=disabled[am]", m.game_vol);
@@ -1228,7 +1274,7 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
                 handled.insert(d.clone());
                 let clip = job.clips.get(i).cloned().unwrap_or_else(|| Clip {
                     account_id: 0, name: String::new(), round: 0, start: 0, end: 0, slot: 1,
-                    kill_ticks: vec![], hits: vec![], drops: vec![], music_start: None, cine: None, hs_ticks: vec![],
+                    kill_ticks: vec![], hits: vec![], drops: vec![], music_start: None, cine: None, hs_ticks: vec![], music_fade_in: None, music_fade_out: None,
                 });
                 // "2026-10-30 15-40-12 R05 3K.mp4" — сортируется по времени, как остальные видео в папке
                 let dst = out.join(match (clip.round, clip.kill_ticks.len()) {
@@ -1294,7 +1340,11 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
         if job.merge && done_clips.len() >= 2 {
             let parts: Vec<PathBuf> = done_clips.iter().map(|c| PathBuf::from(&c.path)).collect();
             let reel = out.join(format!("{prefix} reel {} clips.mp4", parts.len()));
-            if concat_clips(&ff, &parts, &reel, &cache.join("reel.ffconcat")) {
+            // с переходом; не вышло (например, видеокарта не взяла кодирование) — простая склейка
+            let made_reel = reel_with_transitions(&ff, &parts, &reel, job.gpu_encoder.as_deref(), job.crf)
+                || reel_with_transitions(&ff, &parts, &reel, None, job.crf)
+                || concat_clips(&ff, &parts, &reel, &cache.join("reel.ffconcat"));
+            if made_reel {
                 if !job.keep_parts {
                     let dir = cache.join("parts");
                     let _ = fs::create_dir_all(&dir);
