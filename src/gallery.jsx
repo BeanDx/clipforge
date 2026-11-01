@@ -18,7 +18,9 @@ const fmtDur = (s) => (s ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).p
 export function parseName(f) {
   const m = f.name.match(/^(\d{4})-(\d\d)-(\d\d) (\d\d)-(\d\d)-(\d\d)(?: R(\d+))?(?: (\d)K)?/);
   const date = m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : new Date(f.modified);
-  return { ...f, date, round: m?.[7] ? +m[7] : null, kills: m?.[8] ? +m[8] : 0 };
+  // склеенный ролик: «... reel 3 clips.mp4»
+  const reel = f.name.match(/ reel (\d+) clips/);
+  return { ...f, date, round: m?.[7] ? +m[7] : null, kills: m?.[8] ? +m[8] : 0, reel: reel ? +reel[1] : 0 };
 }
 
 function dayLabel(d) {
@@ -91,7 +93,7 @@ function Tile({ clip, meta, onMeta, hlae, onOpen, i }) {
         <span className="gl-play" aria-hidden="true"><i /></span>
       </span>
       <span className="gl-info">
-        <b>{clip.round ? tr("Раунд {0}", clip.round) : clip.name.replace(/\.mp4$/i, "")}{clip.kills ? ` · ${clip.kills >= 5 ? tr("эйс") : tr("{0} килла", clip.kills)}` : ""}</b>
+        <b>{clip.reel ? tr("Ролик · {0} клипа", clip.reel) : clip.round ? tr("Раунд {0}", clip.round) : clip.name.replace(/\.mp4$/i, "")}{clip.kills ? ` · ${clip.kills >= 5 ? tr("эйс") : tr("{0} килла", clip.kills)}` : ""}</b>
         <span className="mono dim">{hhmm(clip.date)} · {fmtSize(clip.size)}</span>
       </span>
     </button>
@@ -116,7 +118,7 @@ function Player({ list, index, setIndex, meta, onReveal, onTrash, onClose }) {
       <div className="gl-player" onClick={(e) => e.stopPropagation()}>
         <div className="gl-player__head">
           <KillBadge kills={clip.kills} />
-          <b>{clip.round ? tr("Раунд {0}", clip.round) : clip.name}</b>
+          <b>{clip.reel ? tr("Ролик · {0} клипа", clip.reel) : clip.round ? tr("Раунд {0}", clip.round) : clip.name}</b>
           <span className="mono dim">{dayLabel(clip.date)}, {hhmm(clip.date)} · {fmtSize(clip.size)}{meta?.dur ? ` · ${fmtDur(meta.dur)}` : ""}</span>
           <span className="chips__spacer" />
           <span className="mono dim">{index + 1} / {list.length}</span>

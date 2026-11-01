@@ -430,6 +430,9 @@ export default function HighlightRenderer() {
   useEffect(() => { try { localStorage.setItem("cf-video-default", JSON.stringify(videoDefault)); } catch {} }, [videoDefault]);
   const [aspect, setAspect] = useState(videoDefault.aspect);
   const [stretch, setStretch] = useState(videoDefault.stretch); // 4:3 — растягивать до 16:9 (как в игре)
+  // несколько клипов — склеить в один ролик (по умолчанию да); выбор переживает перезапуск
+  const [merge, setMerge] = useState(() => { try { return JSON.parse(localStorage.getItem("cf-merge") || "null") ?? { on: true, keep: false }; } catch { return { on: true, keep: false }; } });
+  useEffect(() => { try { localStorage.setItem("cf-merge", JSON.stringify(merge)); } catch {} }, [merge]);
   const [resId, setResId] = useState(videoDefault.resId);
   // новый формат по умолчанию сразу применяется и к текущему клипу
   const applyVideoDefault = (patch) => {
@@ -776,7 +779,7 @@ const voicePayload = useMemo(() => {
       await invoke("start_render", { job: { demo: demoPath, hlae: paths.hlae, cs2: paths.cs2, out: paths.out,
         clips: sel, fps, blur, fov, width, height, crf, vmFov: vm.fov, vmX: vm.x, vmY: vm.y, vmZ: vm.z,
         voiceIndices: voicePayload.indices, voiceIndicesHigh: voicePayload.indicesHigh,
-        gpuEncoder: useGpu && gpuEnc ? gpuEnc : null, ...fx, stamp, startKey, stretch: stretch && aspect === "4:3",
+        gpuEncoder: useGpu && gpuEnc ? gpuEnc : null, ...fx, stamp, startKey, stretch: stretch && aspect === "4:3", merge: merge.on, keepParts: merge.keep,
         music: withMusic ? {
           path: music.path, offset: music.start, musicVol: music.musicVol, gameVol: music.gameVol,
           beatFx: music.beatFx ? music.beatMode || "zoom" : null, beatAmount: music.beatAmount ?? 1,
@@ -1145,6 +1148,13 @@ const voicePayload = useMemo(() => {
                       <Toggle label={tr("Растянуть до 16:9")} hint={tr("Stretched, как в игре на 4:3 - во весь экран без черных полос")}
                         checked={stretch} disabled={aspect !== "4:3"} onChange={setStretch}
                         help={tr("Игра пишется в 4:3, а готовое видео растягивается по ширине до 16:9 - как выглядит игра у тех, кто играет на растянутом разрешении. Плееры и YouTube покажут его во весь экран, без полос по бокам.")} />
+                    </div>
+                    <Toggle label={tr("Склеить клипы в один ролик")} hint={tr("Несколько хайлайтов - одно видео подряд")}
+                      checked={merge.on} onChange={(v) => setMerge((m) => ({ ...m, on: v }))}
+                      help={tr("Если выбрано несколько моментов, после рендера они склеиваются в один ролик по порядку раундов. Видео не пережимается, поэтому склейка занимает секунды. Отдельные клипы по умолчанию убираются из папки, чтобы не мешали, но остаются доступны в \"До / после\".")} />
+                    <div className={`mu-sub ${merge.on ? "is-open" : ""}`}>
+                      <Toggle label={tr("Оставить и отдельные клипы")} hint={tr("Рядом с роликом будут лежать клипы по одному")}
+                        checked={merge.keep} disabled={!merge.on} onChange={(v) => setMerge((m) => ({ ...m, keep: v }))} />
                     </div>
                     <span className="mono dim sub">{tr("разрешение")}<Hint text={tr("Чем выше, тем четче картинка, но дольше запись и тяжелее файл.")} /></span>
                     <div className="presets" role="radiogroup" aria-label={tr("Разрешение")}>
