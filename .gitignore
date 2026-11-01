@@ -27,3 +27,4 @@ dist-ssr
 *.dem
 *.mp4
 src-tauri/target
+src-tauri/parser

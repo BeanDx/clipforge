@@ -103,15 +103,17 @@ clipforge сам находит лучшие моменты, записывае�
 - Windows 10 или 11
 - [Counter-Strike 2](https://store.steampowered.com/app/730) из Steam
 - [HLAE](https://www.advancedfx.org) (Half-Life Advanced Effects). Для кодирования берется его ffmpeg, больше ничего ставить не нужно
-- [Node.js](https://nodejs.org) 18 или новее в `PATH` (пока на нем работает разбор демок)
 
 **Чтобы собрать из исходников, еще:**
+- [Node.js](https://nodejs.org) 18 или новее
 - [Rust](https://rustup.rs) stable и инструменты сборки C++ из Visual Studio
 - WebView2 (уже есть в Windows 10/11)
 
 ## Как запустить
 
-> Готовые сборки скоро будут. Пока clipforge запускается из исходников.
+**Установщик:** скачай `clipforge_x.y.z_x64-setup.exe` в [Releases](https://github.com/BeanDx/clipforge/releases) и запусти. Внутри уже есть все нужное, включая свою копию Node.js для разбора демок.
+
+**Из исходников:**
 
 ```bash
 git clone https://github.com/BeanDx/clipforge.git
@@ -177,7 +179,8 @@ CS2 запускается через HLAE с параметром <code>-insecu
 
 ## Планы
 
-- [ ] Готовый установщик и автообновление
+- [x] Готовый установщик
+- [ ] Автообновление
 - [ ] Мастер первого запуска
 - [ ] Пакетный рендер нескольких демок
 - [ ] Метки киллов прямо в видео (WALLBANG, 1v3 CLUTCH)

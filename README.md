@@ -103,15 +103,17 @@ Things the scoreboard doesn't show: crosshair codes (one click to copy), accurac
 - Windows 10 or 11
 - [Counter-Strike 2](https://store.steampowered.com/app/730) installed through Steam
 - [HLAE](https://www.advancedfx.org) (Half-Life Advanced Effects). Its ffmpeg is used for encoding, so nothing else is needed
-- [Node.js](https://nodejs.org) 18 or newer in `PATH` (demo parsing runs on it for now)
 
 **To build from source, also:**
+- [Node.js](https://nodejs.org) 18 or newer
 - [Rust](https://rustup.rs) stable and the Visual Studio C++ build tools
 - WebView2 (already part of Windows 10/11)
 
 ## Getting started
 
-> Prebuilt releases are on the way. For now clipforge runs from source.
+**Installer:** download `clipforge_x.y.z_x64-setup.exe` from [Releases](https://github.com/BeanDx/clipforge/releases) and run it. Everything it needs is inside, including its own copy of Node.js for demo parsing.
+
+**From source:**
 
 ```bash
 git clone https://github.com/BeanDx/clipforge.git
@@ -177,7 +179,8 @@ CS2 demos from FACEIT, Valve matchmaking and Premier, and SourceTV demos from co
 
 ## Roadmap
 
-- [ ] Prebuilt installer and auto-updates
+- [x] Prebuilt installer
+- [ ] Auto-updates
 - [ ] First-run setup wizard
 - [ ] Batch rendering of several demos
 - [ ] Kill tags in the video (WALLBANG, 1v3 CLUTCH)

@@ -40,6 +40,10 @@ pub fn run() {
       toast::toast_open
     ])
     .setup(|app| {
+      // свой Node и скрипты разбора демок лежат в ресурсах установленной программы (scripts/bundle-parser.cjs)
+      if let Ok(dir) = tauri::Manager::path(app).resource_dir() {
+        render::set_parser_dir(dir.join("parser"));
+      }
       if cfg!(debug_assertions) {
         app.handle().plugin(  
           tauri_plugin_log::Builder::default()

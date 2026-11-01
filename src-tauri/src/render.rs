@@ -506,8 +506,28 @@ fn post_filter(j: &Job, cl: &Clip, has_audio: bool, rubberband: bool, hud: Optio
     g
 }
 
+// Папка parser в ресурсах установленной программы: свой node.exe, скрипты разбора и demoparser2.
+// Задаётся при запуске (lib.rs). Нет её — значит, запуск из исходников: системный node и scripts/ проекта.
+static PARSER_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_parser_dir(dir: PathBuf) {
+    let _ = PARSER_DIR.set(dir);
+}
+
+fn node_command(script: &str) -> (Command, PathBuf) {
+    if let Some(dir) = PARSER_DIR.get() {
+        let s = dir.join("scripts").join(script);
+        if s.exists() {
+            let node = dir.join("node.exe");
+            let cmd = if node.exists() { Command::new(node) } else { Command::new("node") };
+            return (cmd, s);
+        }
+    }
+    (Command::new("node"), Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("scripts").join(script))
+}
+
 fn run_node(script: &str, args: &[&str]) -> Result<String, String> {
-    let mut cmd = Command::new("node");
+    let (mut cmd, script) = node_command(script);
     cmd.arg(script).args(args);
     no_window(&mut cmd);
     let out = cmd.output().map_err(|e| format!("не удалось запустить node: {e}"))?;
@@ -520,19 +540,19 @@ fn run_node(script: &str, args: &[&str]) -> Result<String, String> {
 // Состояние игрока по тикам клипов для HUD «как в матче» (scripts/hud.cjs). ranges — JSON [[start,end],...]
 #[tauri::command]
 pub async fn parse_hud(path: String, steamid: String, ranges: String) -> Result<String, String> {
-    run_node(concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/hud.cjs"), &[&path, &steamid, &ranges])
+    run_node("hud.cjs", &[&path, &steamid, &ranges])
 }
 
 // Положение игрока вокруг киллов и сдвиг игрового времени — для облёта камерой (scripts/cine.cjs)
 #[tauri::command]
 pub async fn parse_cine(path: String, steamid: String, kills: String) -> Result<String, String> {
-    run_node(concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/cine.cjs"), &[&path, &steamid, &kills])
+    run_node("cine.cjs", &[&path, &steamid, &kills])
 }
 
 // Досье матча: счёт, сервер и статистика игроков для вкладок «Демо» и «Архив» (scripts/info.cjs)
 #[tauri::command]
 pub async fn demo_info(path: String) -> Result<String, String> {
-    run_node(concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/info.cjs"), &[&path])
+    run_node("info.cjs", &[&path])
 }
 
 // Текущие уровень и эло FACEIT игроков по steamid. Data API FACEIT без ключа не отвечает —
@@ -559,7 +579,7 @@ pub async fn faceit_levels(key: String, steamids: Vec<String>) -> Result<HashMap
 // Углы обзора игрока по тикам клипов — для текста песни, закреплённого в мире (scripts/cam.cjs)
 #[tauri::command]
 pub async fn parse_cam(path: String, steamid: String, ranges: String) -> Result<String, String> {
-    run_node(concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/cam.cjs"), &[&path, &steamid, &ranges])
+    run_node("cam.cjs", &[&path, &steamid, &ranges])
 }
 
 // Сохраняет файл из сырого тела запроса (кадры HUD). Путь — в заголовке x-path, закодирован
@@ -593,18 +613,10 @@ fn percent_decode(s: &str) -> Result<String, String> {
 }
 
 // Парсинг демки через Node + нативный @laihoe/demoparser2 (актуальный парсер CS2).
-// Для dev-режима нужен установленный Node. Для релиза заменим на sidecar или Rust-парсер.
+// В установленной программе Node свой (папка parser в ресурсах), при запуске из исходников — системный.
 #[tauri::command]
 pub async fn parse_demo(path: String) -> Result<String, String> {
-    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/parse.cjs");
-    let mut cmd = Command::new("node");
-    cmd.arg(script).arg(&path);
-    no_window(&mut cmd);
-    let out = cmd.output().map_err(|e| format!("не удалось запустить node: {e}"))?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
-    }
-    String::from_utf8(out.stdout).map_err(|e| e.to_string())
+    run_node("parse.cjs", &[&path])
 }
 
 // Возвращает (стартовый cfg с настройками, cfg с самой записью). Второй запускается по F10 уже внутри загруженной демки.
