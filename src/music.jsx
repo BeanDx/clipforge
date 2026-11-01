@@ -5,11 +5,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
-import { tr, trError } from "./i18n";
+import { tr, trError, useLang } from "./i18n";
+import { LYRIC_STYLES, drawLyricStyle, lyricFont, lyricStyle, wordsOf } from "./lyricStyles";
+import previewBg from "./assets/previews/lyrics-bg.webp";
 export const MUSIC_DEFAULT = {
   enabled: false, path: "", title: "", artist: "", duration: 0,
   lrc: "", start: 0, musicVol: 0.8, gameVol: 0.35, showLyrics: true, chorusSlow: false, chorusOnKill: true,
   beatFx: false, beatMode: "zoom", beatAmount: 1,
+  lyricStyle: "karaoke",
 };
 const BEAT_MODES = [["zoom", "Зум"], ["shake", "Тряска"], ["both", "Зум + тряска"]];
 
@@ -44,7 +47,6 @@ export function pickChorus(lines, len) {
 
 // --- кадры текста песни (накладываются ffmpeg после slow-mo, как HUD) ---
 // Unbounded — жирный широкий шрифт с кириллицей, как в эдитах (подключён в highlight-renderer.css)
-const FONT = '"Unbounded", "Bahnschrift", "Segoe UI", sans-serif';
 const TICKRATE = 64;
 
 // slow-mo — те же ступени, что SLOWMO_RAMP в render.rs: (от, до, скорость) относительно килла
@@ -173,7 +175,6 @@ function camAt(cam, tick) {
 }
 
 // детерминированный «случай» для рассыпания букв
-const rnd = (n) => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
 
 // Строки песни -> куски для экрана: длинная строка делится на две половины (слева и справа)
 function layoutParts(lines) {
@@ -198,102 +199,21 @@ function layoutParts(lines) {
   return parts;
 }
 
-// Слова куска с таймингом: время звучания [t0, t1] делится между словами по их длине
-function wordsOf(p) {
-  const words = p.text.split(/\s+/).filter(Boolean);
-  const total = words.reduce((s, w) => s + w.length + 1, 0);
-  let acc = 0;
-  return words.map((w) => {
-    const ws = p.t0 + ((p.t1 - p.t0) * acc) / total;
-    acc += w.length + 1;
-    return { w, ws, we: p.t0 + ((p.t1 - p.t0) * acc) / total };
-  });
-}
-
-const easeOutBack = (x) => { const c = 1.9; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
-
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
-
 // Кусок строки, «висящий» в мире: позиция на экране зависит от того, куда смотрит камера.
-// Как в эдитах: слова выпрыгивают по одному, текущее — в жёлтой плашке, которая заливается
-// слева направо по ходу слова (караоке); в конце строки буквы рассыпаются.
-function drawPart(ctx, p, t, cam, proj, k, pi) {
+// Сами слова рисует выбранный стиль (src/lyricStyles.js) в системе координат строки.
+function drawPart(ctx, p, t, cam, proj, k, pi, style) {
   // yaw растёт влево: точка левее взгляда имеет rel > 0 и на экране левее центра
   const rel = wrap(p.yaw - cam.yaw);
   if (Math.abs(rel) > 75) return;
   const x = proj.cx - proj.f * Math.tan((rel * Math.PI) / 180);
   const y = proj.cy - proj.f * Math.tan(((cam.pitch - p.pitch) * Math.PI) / 180);
-  const size = 40 * k;
-  const words = wordsOf(p);
-  // рассыпание: последние 0.6 с строки буквы разлетаются вниз и в стороны, вращаются и тают
+  // исчезновение: последние 0.6 с строки
   const sc = Math.max(0, Math.min(1, (t - (p.end - 0.6)) / 0.6));
   ctx.save();
-  ctx.font = `800 ${size}px ${FONT}`;
-  ctx.textBaseline = "middle";
-  const space = size * 0.32;
-  const widths = words.map((w) => ctx.measureText(w.w).width);
-  const total = widths.reduce((s, w) => s + w, 0) + space * (words.length - 1);
   // плоскость текста развёрнута к камере, но при уходе к краю слегка «поворачивается» — объём
   const squash = 1 - Math.min(Math.abs(rel), 60) / 260;
   ctx.setTransform(squash, Math.sin((rel * Math.PI) / 180) * 0.12, 0, 1, x, y);
-
-  let cx = -total / 2;
-  words.forEach((wd, wi) => {
-    const ww = widths[wi];
-    if (t < wd.ws) { cx += ww + space; return; }
-    const active = sc === 0 && t < wd.we && t < p.t1 + 0.05;
-    // выпрыгивание слова: 0.18 с с лёгким перелётом
-    const pop = easeOutBack(Math.min(1, (t - wd.ws) / 0.18));
-    ctx.save();
-    ctx.translate(cx + ww / 2, 0);
-    ctx.scale(0.6 + 0.4 * pop, 0.6 + 0.4 * pop);
-    if (active) {
-      // плашка караоке: полупрозрачная основа + сплошная заливка по ходу слова
-      const fill = Math.min(1, (t - wd.ws) / Math.max(wd.we - wd.ws, 0.05));
-      const px = size * 0.28, ph = size * 1.35;
-      ctx.shadowColor = "rgba(245,197,24,.55)";
-      ctx.shadowBlur = 18 * k;
-      roundRect(ctx, -ww / 2 - px, -ph / 2, ww + px * 2, ph, size * 0.22);
-      ctx.fillStyle = "rgba(245,197,24,.28)";
-      ctx.fill();
-      ctx.save();
-      ctx.clip();
-      ctx.fillStyle = "#f5c518";
-      ctx.fillRect(-ww / 2 - px, -ph / 2, (ww + px * 2) * fill, ph);
-      ctx.restore();
-      ctx.shadowBlur = 0;
-    }
-    // буквы — по одной, чтобы рассыпать их в конце строки
-    ctx.shadowColor = "rgba(0,0,0,.8)";
-    ctx.shadowBlur = active ? 0 : 14 * k;
-    let lx = -ww / 2;
-    for (let c = 0; c < wd.w.length; c++) {
-      const ch = wd.w[c];
-      const cw = ctx.measureText(ch).width;
-      const seed = pi * 997 + wi * 61 + c * 13;
-      const e = sc * sc;
-      const dx = (rnd(seed) - 0.5) * 2.4 * size * sc;
-      const dy = (rnd(seed + 1) * 0.8 + 0.3) * size * sc + e * size * 1.8;
-      ctx.save();
-      ctx.translate(lx + cw / 2 + dx, dy);
-      ctx.rotate((rnd(seed + 2) - 0.5) * 2.6 * sc);
-      ctx.globalAlpha = 1 - Math.pow(sc, 1.2);
-      ctx.fillStyle = active ? "#0b0d11" : "#ffffff";
-      ctx.fillText(ch, -cw / 2, 0);
-      ctx.restore();
-      lx += cw;
-    }
-    ctx.restore();
-    cx += ww + space;
-  });
+  drawLyricStyle(ctx, style, { p, t, size: 40 * k, k, pi, sc, words: wordsOf(p) });
   ctx.restore();
 }
 
@@ -303,7 +223,7 @@ const pngOf = (canvas) => new Promise((ok, fail) =>
 // Кадры текста песни для одного клипа. Текст «закреплён» в мире: строка появляется левее/правее
 // взгляда и остаётся на месте, когда камера поворачивается (углы — из демки, cam: [[tick, pitch, yaw]]).
 // Время — итоговое (после slow-mo): музыка не замедляется, а камера берётся из записи через outToIn.
-export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo, drops = [], fov, fps, W, H, save, onFrame }) {
+export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo, drops = [], fov, fps, W, H, save, onFrame, style = "karaoke" }) {
   const cam = smoothCam(rawCam);
   const lines = parseLrc(lrc);
   const parts = layoutParts(lines);
@@ -325,7 +245,7 @@ export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo,
   const canvas = document.createElement("canvas");
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext("2d");
-  await document.fonts.load(`800 40px ${FONT}`).catch(() => {});
+  await document.fonts.load(lyricFont(style, 40), "Aa Яя").catch(() => {});
 
   let list = "ffconcat version 1.0\n";
   let blank = null, n = 0;
@@ -351,7 +271,7 @@ export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo,
     } else {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, W, H);
-      live.forEach((p) => drawPart(ctx, p, tTrack, view, proj, k, parts.indexOf(p)));
+      live.forEach((p) => drawPart(ctx, p, tTrack, view, proj, k, parts.indexOf(p), style));
       name = `f${String(n++).padStart(5, "0")}.png`;
       await save(name, await pngOf(canvas));
     }
@@ -578,13 +498,79 @@ function LyricsEditor({ path, initial, onDone, onCancel }) {
   );
 }
 
+// Живое превью стиля текста для подсказки «?»: короткая строка на кадре из игры, по кругу
+function LyricPreview({ style }) {
+  const ref = useRef(null);
+  const lang = useLang();
+  useEffect(() => {
+    const cv = ref.current;
+    const ctx = cv.getContext("2d");
+    const img = new Image();
+    img.src = previewBg;
+    const W = cv.width, H = cv.height, k = H / 560;
+    const p = { text: tr("сделал эйс на миде"), t0: 0.35, t1: 2.2, end: 3.7 };
+    document.fonts.load(lyricFont(style, 40), "Aa Яя").catch(() => {});
+    const start = performance.now();
+    let raf;
+    const loop = (now) => {
+      raf = requestAnimationFrame(loop);
+      // подсказка закрыта — не рисуем
+      if (cv.checkVisibility && !cv.checkVisibility({ visibilityProperty: true })) return;
+      const t = ((now - start) / 1000) % 4.3;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      if (img.complete && img.naturalWidth) ctx.drawImage(img, 0, 0, W, H);
+      else { ctx.fillStyle = "#0b0f14"; ctx.fillRect(0, 0, W, H); }
+      if (t < p.t0 || t >= p.end) return;
+      const sc = Math.max(0, Math.min(1, (t - (p.end - 0.6)) / 0.6));
+      ctx.setTransform(1, 0, 0, 1, W / 2, H * 0.42);
+      drawLyricStyle(ctx, style, { p, t, size: 40 * k, k, pi: 3, sc, words: wordsOf(p) });
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [style, lang]);
+  return (
+    <span className="pv" style={{ aspectRatio: "16 / 9" }}>
+      <canvas ref={ref} width={640} height={360} className="ly-canvas" />
+      <em className="pv__tag">{tr("пример")}</em>
+    </span>
+  );
+}
+
+// Выбор стиля текста: строка с текущим стилем раскрывает список, у каждого стиля «?» с живым превью
+function LyricStylePicker({ value, onChange, Hint }) {
+  const [open, setOpen] = useState(false);
+  const cur = lyricStyle(value);
+  return (
+    <div className="ly-pick">
+      <button type="button" className={`ly-head ${open ? "is-open" : ""}`} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <span className="mono dim">{tr("стиль текста")}</span>
+        <b style={{ fontFamily: cur.font, fontWeight: cur.weight }}>{tr(cur.label)}</b>
+        <i className="ly-caret" aria-hidden="true" />
+      </button>
+      <div className={`ly-list ${open ? "is-open" : ""}`}>
+        <div>
+          {LYRIC_STYLES.map((s) => (
+            <button key={s.id} type="button" className={`ly-item ${s.id === value ? "is-on" : ""}`}
+              onClick={() => { onChange(s.id); setOpen(false); }}>
+              <b style={{ fontFamily: s.font, fontWeight: s.weight }}>{tr(s.label)}</b>
+              <span className="dim">{tr(s.short)}</span>
+              {Hint && <Hint text={tr(s.help)} preview={<LyricPreview style={s.id} />} />}
+              <i className="check" />
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --- панель ---
 function Equalizer({ on }) {
   return <span className={`mu-eq ${on ? "is-on" : ""}`} aria-hidden="true"><i /><i /><i /><i /></span>;
 }
 
 // Toggle — тумблер приложения (из HighlightRenderer), чтобы панель выглядела как остальные
-export function MusicPanel({ music, setMusic, hlae, clipLen, Toggle }) {
+export function MusicPanel({ music, setMusic, hlae, clipLen, Toggle, Hint }) {
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [editing, setEditing] = useState(false);
@@ -738,8 +724,11 @@ export function MusicPanel({ music, setMusic, hlae, clipLen, Toggle }) {
                     onChange={(e) => set({ gameVol: +e.target.value })} />
                 </label>
               </div>
-              <Toggle label={tr("Текст песни на экране")} hint={tr("Висит в мире, слова выпрыгивают, текущее подсвечено")}
+              <Toggle label={tr("Текст песни на экране")} hint={tr("Текст висит прямо на карте, стиль выбирается ниже")}
                 checked={music.showLyrics} disabled={!lines.length} onChange={(v) => set({ showLyrics: v })} />
+              <div className={`mu-sub ${music.showLyrics && lines.length ? "is-open" : ""}`}>
+                <LyricStylePicker value={music.lyricStyle || "karaoke"} onChange={(id) => set({ lyricStyle: id })} Hint={Hint} />
+              </div>
               <Toggle label={tr("Замедление на припеве")} hint={tr("Плавный slow-mo в момент, когда начинается припев")}
                 help={tr("Программа находит в тексте припев (строки, которые повторяются) и в момент его начала очень плавно замедляет видео примерно в 3 раза, держит и так же плавно разгоняет обратно. Трек при этом не замедляется. Если припев в клип не попал - ничего не меняется.")}
                 checked={!!music.chorusSlow} disabled={!lines.length} onChange={(v) => set({ chorusSlow: v })} />
