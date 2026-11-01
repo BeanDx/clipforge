@@ -377,7 +377,7 @@ export default {
   "моментов": "moments",
   "название": "title",
   "начнется запись · клипов:": "recording will start · clips:",
-  "не сворачивай игру": "don't minimize the game",
+  "можно переключиться в другое окно, только не сворачивай игру": "you can switch to another window, just don't minimize the game",
   "не скопировалось: {0}": "couldn't copy: {0}",
   "не сохранилось: {0}": "couldn't save: {0}",
   "не удалось разобрать матч: {0}": "couldn't read the match: {0}",

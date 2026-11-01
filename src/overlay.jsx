@@ -44,7 +44,7 @@ export default function Overlay() {
       <span>{tr("клип")} {s.clip} {tr("из")} {s.total}</span>
       <span className="ov-bar"><i style={{ width: `${Math.min(100, s.pct)}%` }} /></span>
       <span className="ov-pct">{Math.round(s.pct)}%</span>
-      <span className="ov-hint">{tr("не сворачивай игру")}</span>
+      <span className="ov-hint">{tr("можно переключиться в другое окно, только не сворачивай игру")}</span>
     </div>
   );
 }
