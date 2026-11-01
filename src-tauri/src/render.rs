@@ -135,6 +135,29 @@ pub struct Job {
     // 4:3 растянуть до 16:9 (stretched, как у про-игроков)
     #[serde(default)]
     stretch: bool,
+    // несколько клипов — склеить в один ролик; keep_parts — оставить и отдельные клипы рядом с ним
+    #[serde(default = "yes")]
+    merge: bool,
+    #[serde(default)]
+    keep_parts: bool,
+}
+fn yes() -> bool { true }
+
+// Склейка готовых клипов в один ролик: у них одинаковые кодеки, разрешение и fps
+fn concat_clips(ff: &Path, parts: &[PathBuf], dst: &Path, list: &Path) -> bool {
+    let body: String = parts.iter()
+        .map(|p| format!("file '{}'\n", p.to_string_lossy().replace('\\', "/").replace('\'', "'\\''")))
+        .collect();
+    if fs::write(list, body).is_err() { return false; }
+    let mut cmd = Command::new(ff);
+    // видео копируется как есть; звук пересобирается — при копировании AAC на стыках клипов
+    // повторялись метки времени, и ffmpeg ронял склейку. -xerror: любая ошибка = неудача
+    cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-xerror", "-f", "concat", "-safe", "0", "-i"]).arg(list)
+        .args(["-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]).arg(dst);
+    no_window(&mut cmd);
+    let ok = cmd.status().map(|s| s.success()).unwrap_or(false) && dst.exists();
+    let _ = fs::remove_file(list);
+    ok
 }
 fn default_start_key() -> String { "f10".into() }
 
@@ -1162,9 +1185,13 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
             let tail = log_tail(&console_log).unwrap_or_default();
             rec = if recording_finished(&tail, total) { 1.0 }
                 else { f64::max(rec, recorded_fraction(&job.clips, last_progress_tick(&tail), dirs.len())) };
-            for (i, d) in dirs.iter().enumerate() {
+            for (pos, d) in dirs.iter().enumerate() {
                 if handled.contains(d) { continue; }
-                let ready = i + 1 < dirs.len() || !running || (dirs.len() >= total && settled(d, &mut sizes));
+                // номер клипа — сколько записей уже обработано: готовые take-папки уезжают в кэш,
+                // поэтому позиция в папке не совпадает с номером клипа (и раньше путала клипы)
+                let i = handled.len();
+                // запись готова: началась следующая, игра закрыта, или это последний клип и файлы перестали расти
+                let ready = pos + 1 < dirs.len() || !running || (i + 1 >= total && settled(d, &mut sizes));
                 if !ready { continue; }
                 handled.insert(d.clone());
                 let clip = job.clips.get(i).cloned().unwrap_or_else(|| Clip {
@@ -1229,6 +1256,31 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
                 format!("не удалось собрать клипы, сырая запись осталась в {}", work.display())
             });
             return;
+        }
+        // несколько клипов — один ролик: «2026-11-01 17-36-17 reel 3 clips.mp4». Отдельные клипы
+        // уезжают в кэш последнего рендера (там их видит «До / после») или остаются, если так выбрано.
+        if job.merge && done_clips.len() >= 2 {
+            let parts: Vec<PathBuf> = done_clips.iter().map(|c| PathBuf::from(&c.path)).collect();
+            let reel = out.join(format!("{prefix} reel {} clips.mp4", parts.len()));
+            if concat_clips(&ff, &parts, &reel, &cache.join("reel.ffconcat")) {
+                if !job.keep_parts {
+                    let dir = cache.join("parts");
+                    let _ = fs::create_dir_all(&dir);
+                    for part in &parts {
+                        let Some(name) = part.file_name() else { continue };
+                        let moved = dir.join(name);
+                        if fs::rename(part, &moved).is_ok() {
+                            let from = part.to_string_lossy().to_string();
+                            for c in compare.iter_mut().filter(|c| c.out == from) { c.out = moved.to_string_lossy().to_string(); }
+                        }
+                    }
+                    let _ = fs::write(cache.join("compare.json"), serde_json::to_string(&compare).unwrap_or_default());
+                }
+                done_clips = vec![crate::toast::ToastClip {
+                    path: reel.to_string_lossy().to_string(),
+                    name: reel.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+                }];
+            }
         }
         let _ = app.emit("render-progress", 100.0_f32);
         let _ = app.emit("render-done", out.to_string_lossy().to_string());

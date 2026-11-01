@@ -76,7 +76,7 @@ export default function Toast() {
         <span className="tst-tag">{tr("clipforge · готово")}</span>
         <b className="tst-title">{n > 1 ? tr("{0} хайлайта готовы", n) : tr("Хайлайт готов")}</b>
         <span className="tst-sub">
-          {[clip.round && tr("Раунд {0}", clip.round), kills(clip.kills), fmtDur(meta?.dur)].filter(Boolean).join(" · ") || clip.name}
+          {[clip.reel ? tr("Ролик · {0} клипа", clip.reel) : clip.round && tr("Раунд {0}", clip.round), kills(clip.kills), fmtDur(meta?.dur)].filter(Boolean).join(" · ") || clip.name}
         </span>
         <div className="tst-acts">
           <button type="button" className="tst-go" onClick={() => invoke("toast_open", { path: clip.path })}>

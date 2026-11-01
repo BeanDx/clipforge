@@ -530,4 +530,10 @@ export default {
   "Акцент": "Accent",
   "одно слово крупно, акценты красным, под бит": "one big word at a time, red accents, on beat",
   "Как в TikTok-эдитах: по одному слову крупно в центре экрана, с объемной тенью. Слова сменяются ровно на ударах трека, буквы собираются вразнобой. Ударные слова огромные и темно-красные: весь припев и самое длинное слово каждой строки.": "Like TikTok edits: one big word at a time in the middle of the screen, with a 3D shadow. Words switch exactly on the track's beats and the letters snap together out of order. Accent words are huge and dark red: the whole chorus and the longest word of every line.",
+  "Склеить клипы в один ролик": "Merge clips into one video",
+  "Несколько хайлайтов - одно видео подряд": "Several highlights, one video back to back",
+  "Если выбрано несколько моментов, после рендера они склеиваются в один ролик по порядку раундов. Видео не пережимается, поэтому склейка занимает секунды. Отдельные клипы по умолчанию убираются из папки, чтобы не мешали, но остаются доступны в \"До / после\".": "If you picked several moments, after rendering they are joined into one video in round order. The video isn't re-encoded, so merging takes seconds. Separate clips are moved out of the folder by default so they don't clutter it, but they're still available in \"Before / after\".",
+  "Оставить и отдельные клипы": "Also keep separate clips",
+  "Рядом с роликом будут лежать клипы по одному": "Each clip is saved next to the merged video too",
+  "Ролик · {0} клипа": "Reel · {0} clips",
 };
