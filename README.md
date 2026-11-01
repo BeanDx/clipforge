@@ -135,7 +135,7 @@ The installer ends up in `src-tauri/target/release/bundle/`.
 2. Drop a `.dem` file on the **Demo** tab.
 3. Pick a player in **Match stats**, choose moments, tweak **Clip settings**.
 4. Press **Start render**, wait for the demo to load in CS2 and press **F10**.
-5. When the hint says recording is done, you can minimize the game. The finished clips land in **Highlights**.
+5. After pressing F10 you can alt-tab and do something else, recording keeps going. When it's done you get a notification and the clips land in **Highlights**.
 
 ## FAQ
 

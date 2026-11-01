@@ -31,7 +31,7 @@ export default function Overlay() {
       <div className="ov ov--done" key="done">
         <i className="ov-check" />
         <div className="ov-text">
-          <b>{tr("Запись готова - можно сворачивать игру")}</b>
+          <b>{tr("Запись готова")}</b>
           <span>{tr("дальше программа сама соберет видео, прогресс - в окне clipforge")}</span>
         </div>
       </div>
@@ -44,7 +44,7 @@ export default function Overlay() {
       <span>{tr("клип")} {s.clip} {tr("из")} {s.total}</span>
       <span className="ov-bar"><i style={{ width: `${Math.min(100, s.pct)}%` }} /></span>
       <span className="ov-pct">{Math.round(s.pct)}%</span>
-      <span className="ov-hint">{tr("можно переключиться в другое окно, только не сворачивай игру")}</span>
+      <span className="ov-hint">{tr("можно переключиться в другое окно, запись идет дальше")}</span>
     </div>
   );
 }
