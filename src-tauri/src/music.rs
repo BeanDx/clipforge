@@ -48,6 +48,14 @@ pub fn detect_beats(ff: &Path, track: &str, offset: f64, dur: f64) -> Vec<f64> {
     beats
 }
 
+// Удары куска трека для текста песни, у которого слова встают на удары (стиль «Акцент»).
+// Секунды от offset — как у detect_beats.
+#[tauri::command]
+pub async fn track_beats(hlae: String, path: String, offset: f64, dur: f64) -> Result<Vec<f64>, String> {
+    let ff = Path::new(&hlae).parent().ok_or("неверный путь к HLAE")?.join("ffmpeg").join("bin").join("ffmpeg.exe");
+    Ok(detect_beats(&ff, &path, offset.max(0.0), dur))
+}
+
 // Файл трека для прослушивания в панели: отдаём байты напрямую (без JSON),
 // чтобы не открывать окну программы доступ к файлам через asset-протокол
 #[tauri::command]

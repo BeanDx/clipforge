@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import { tr, trError, useLang } from "./i18n";
-import { LYRIC_STYLES, drawLyricStyle, lyricFont, lyricStyle, wordsOf } from "./lyricStyles";
+import { LYRIC_STYLES, drawLyricStyle, lyricFont, lyricStyle, snapWords, wordsOf } from "./lyricStyles";
 import previewBg from "./assets/previews/lyrics-bg.webp";
 export const MUSIC_DEFAULT = {
   enabled: false, path: "", title: "", artist: "", duration: 0,
@@ -204,16 +204,24 @@ function layoutParts(lines) {
 function drawPart(ctx, p, t, cam, proj, k, pi, style) {
   // yaw растёт влево: точка левее взгляда имеет rel > 0 и на экране левее центра
   const rel = wrap(p.yaw - cam.yaw);
-  if (Math.abs(rel) > 75) return;
+  if (Math.abs(rel) > 75 && !lyricStyle(style).screen) return;
   const x = proj.cx - proj.f * Math.tan((rel * Math.PI) / 180);
   const y = proj.cy - proj.f * Math.tan(((cam.pitch - p.pitch) * Math.PI) / 180);
   // исчезновение: последние 0.6 с строки
   const sc = Math.max(0, Math.min(1, (t - (p.end - 0.6)) / 0.6));
+  const st = lyricStyle(style);
+  // слова на ударах трека (стили со snap)
+  const words = st.snap ? snapWords(wordsOf(p), p.beats) : wordsOf(p);
   ctx.save();
-  // плоскость текста развёрнута к камере, но при уходе к краю слегка «поворачивается» — объём
-  const squash = 1 - Math.min(Math.abs(rel), 60) / 260;
-  ctx.setTransform(squash, Math.sin((rel * Math.PI) / 180) * 0.12, 0, 1, x, y);
-  drawLyricStyle(ctx, style, { p, t, size: 40 * k, k, pi, sc, words: wordsOf(p) });
+  if (st.screen) {
+    // стиль поверх экрана: по центру кадра, камера не влияет
+    ctx.setTransform(1, 0, 0, 1, proj.cx, proj.cy * 0.92);
+  } else {
+    // плоскость текста развёрнута к камере, но при уходе к краю слегка «поворачивается» — объём
+    const squash = 1 - Math.min(Math.abs(rel), 60) / 260;
+    ctx.setTransform(squash, Math.sin((rel * Math.PI) / 180) * 0.12, 0, 1, x, y);
+  }
+  drawLyricStyle(ctx, style, { p, t, size: 40 * k, k, pi, sc, words, maxW: proj.cx * 1.7 });
   ctx.restore();
 }
 
@@ -223,10 +231,14 @@ const pngOf = (canvas) => new Promise((ok, fail) =>
 // Кадры текста песни для одного клипа. Текст «закреплён» в мире: строка появляется левее/правее
 // взгляда и остаётся на месте, когда камера поворачивается (углы — из демки, cam: [[tick, pitch, yaw]]).
 // Время — итоговое (после slow-mo): музыка не замедляется, а камера берётся из записи через outToIn.
-export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo, drops = [], fov, fps, W, H, save, onFrame, style = "karaoke" }) {
+export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo, drops = [], fov, fps, W, H, save, onFrame, style = "karaoke", beats = [] }) {
   const cam = smoothCam(rawCam);
   const lines = parseLrc(lrc);
   const parts = layoutParts(lines);
+  // припев (строки, которые повторяются) — для акцентов в стиле «Акцент»; удары — в секундах трека
+  const counts = new Map();
+  for (const l of lines) if (l.text) counts.set(norm(l.text), (counts.get(norm(l.text)) || 0) + 1);
+  for (const pt of parts) { pt.chorus = (counts.get(norm(lines[pt.li].text)) || 0) >= 2; pt.beats = beats; }
   const base = (clip.end - clip.start) / TICKRATE;
   const kills = slowmo ? (clip.killTicks || []).map((t) => (t - clip.start) / TICKRATE) : [];
   const segs = slowmo || drops.length ? slowmoSegments(kills, drops) : [[0, Infinity, 1]];
@@ -263,7 +275,9 @@ export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo,
       p.yaw = anchors[p.li].yaw + p.side * 24;
       p.pitch = anchors[p.li].pitch;
     }
-    const live = parts.filter((p) => tTrack >= p.t0 && tTrack < p.end);
+    let live = parts.filter((p) => tTrack >= p.t0 && tTrack < p.end);
+    // экранный стиль показывает одно слово: только самую свежую строку
+    if (lyricStyle(style).screen && live.length > 1) live = [live.reduce((a, b) => (b.t0 > a.t0 ? b : a))];
     let name;
     if (!live.length) {
       if (!blank) { ctx.clearRect(0, 0, W, H); blank = "blank.png"; await save(blank, await pngOf(canvas)); }
@@ -522,8 +536,8 @@ function LyricPreview({ style }) {
       else { ctx.fillStyle = "#0b0f14"; ctx.fillRect(0, 0, W, H); }
       if (t < p.t0 || t >= p.end) return;
       const sc = Math.max(0, Math.min(1, (t - (p.end - 0.6)) / 0.6));
-      ctx.setTransform(1, 0, 0, 1, W / 2, H * 0.42);
-      drawLyricStyle(ctx, style, { p, t, size: 40 * k, k, pi: 3, sc, words: wordsOf(p) });
+      ctx.setTransform(1, 0, 0, 1, W / 2, H * (lyricStyle(style).screen ? 0.5 : 0.42));
+      drawLyricStyle(ctx, style, { p, t, size: 40 * k, k, pi: 3, sc, words: wordsOf(p), maxW: W * 0.86 });
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
