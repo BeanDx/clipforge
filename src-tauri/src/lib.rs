@@ -36,6 +36,8 @@ pub fn run() {
       gallery::clip_thumb,
       gallery::reveal_clip,
       gallery::trash_clip,
+      gallery::list_replays,
+      gallery::open_replays,
       toast::toast_data,
       toast::toast_close,
       toast::toast_open

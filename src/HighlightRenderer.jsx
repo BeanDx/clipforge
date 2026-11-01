@@ -16,6 +16,7 @@ import { MatchDossier, infoSummary, mapName, mapTint } from "./dossier";
 import { drawCard } from "./card";
 import { CompareModal } from "./compare";
 import { Gallery } from "./gallery";
+import { LiveStatus } from "./live";
 import shotHudMatch from "./assets/previews/hud-match.webp";
 import shotHudDemo from "./assets/previews/hud-demo.webp";
 import "./highlight-renderer.css";
@@ -832,7 +833,8 @@ const voicePayload = useMemo(() => {
           ))}
           {ink && <li className="tabs__ink" aria-hidden="true" style={{ "--x": `${ink.left}px`, width: ink.width }} />}
         </ul>
-        <div className="status mono"><i className="dot" /> {tr("CS2 найден")}</div>
+        <LiveStatus cs2={paths.cs2} rendering={rendering} progress={progress} archiveCount={archive.length}
+          onOpen={(path) => { setTab(0); loadPath(path); }} />
       </nav>
 
       {tab === HIGHLIGHTS_TAB ? (
