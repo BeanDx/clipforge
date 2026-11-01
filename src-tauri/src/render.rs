@@ -645,6 +645,9 @@ fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, Str
         "viewmodel_fov {}\nviewmodel_offset_x {}\nviewmodel_offset_y {}\nviewmodel_offset_z {}\n",
         j.vm_fov, j.vm_x, j.vm_y, j.vm_z
     );
+    // запись идёт и когда игра не в фокусе (можно уйти в браузер): без фокуса CS2 по умолчанию
+    // засыпает между кадрами и глушит звук — запись тормозила бы, а в audio.wav была бы тишина
+    c += "engine_no_focus_sleep 0\nsnd_mute_losefocus 0\n";
     c += &format!("bind {} \"exec clipforge_run\"\n", j.start_key);
 
     c += &format!("tv_listen_voice_indices_h {}\n", j.voice_indices_high);
