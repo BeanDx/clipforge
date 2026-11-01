@@ -539,4 +539,7 @@ export default {
   "Умная подача текста": "Smart lyrics timing",
   "Текст в паузах, камера тянется к строке": "Lyrics in the quiet moments, camera leans toward the line",
   "Строки, на которые приходится килл, не показываются, чтобы текст не закрывал фраг. Припев показывается всегда. Когда ничего не происходит, камера плавно наезжает на строку, а в долгих паузах строка встает крупно в центр экрана.": "Lines that land on a kill are skipped so the text never covers the frag. The chorus always shows. When nothing is happening, the camera smoothly pushes in toward the line, and in long pauses the line moves big into the center of the screen.",
+  "Что-то сломалось в интерфейсе": "Something broke in the interface",
+  "Перезагрузи окно. Если повторится, пришли этот текст разработчику:": "Reload the window. If it happens again, send this text to the developer:",
+  "Перезагрузить": "Reload",
 };

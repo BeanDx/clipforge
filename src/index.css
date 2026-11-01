@@ -23,3 +23,8 @@ input, textarea {
 
 a { -webkit-user-drag: none; }
 img { -webkit-user-drag: none; pointer-events: none; }
+/* экран ошибки вместо белого экрана (App.jsx) */
+.crash { min-height: 100vh; box-sizing: border-box; padding: 48px; display: flex; flex-direction: column; gap: 14px; background: #07090d; color: #d6dde6; font-family: "Rajdhani", system-ui, sans-serif; }
+.crash b { font-size: 1.6rem; color: #f5c518; }
+.crash pre { max-height: 50vh; overflow: auto; padding: 14px; background: #0c1016; border: 1px solid #2c3a4b; color: #e5484d; font: 12px/1.5 "JetBrains Mono", monospace; white-space: pre-wrap; }
+.crash .go { align-self: flex-start; }
