@@ -1,0 +1,107 @@
+// Вкладка «Хайлайты»: готовые клипы из папки вывода — список, превью-кадры, показ в проводнике, удаление в корзину.
+// Сами видео окно читает через asset-протокол, доступ к которому открывается только для папки клипов.
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::UNIX_EPOCH;
+use tauri::Manager;
+
+const THUMBS: &str = ".clipforge_thumbs";
+
+#[derive(Serialize)]
+pub struct ClipFile {
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    pub modified: u64, // мс с 1970
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ClipThumb {
+    pub thumb: String,
+    pub dur: f64,
+}
+
+fn mtime(p: &Path) -> u64 {
+    fs::metadata(p).and_then(|m| m.modified()).ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64)
+}
+
+#[tauri::command]
+pub fn list_clips(app: tauri::AppHandle, out: String) -> Result<Vec<ClipFile>, String> {
+    let dir = PathBuf::from(&out);
+    if !dir.is_dir() { return Ok(vec![]); }
+    // окну можно читать только эту папку (видео и превью), остальной диск закрыт
+    app.asset_protocol_scope().allow_directory(&dir, true).map_err(|e| e.to_string())?;
+    let mut list: Vec<ClipFile> = fs::read_dir(&dir).map_err(|e| e.to_string())?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("mp4")))
+        .map(|p| ClipFile {
+            name: p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+            size: fs::metadata(&p).map_or(0, |m| m.len()),
+            modified: mtime(&p),
+            path: p.to_string_lossy().to_string(),
+        })
+        .collect();
+    list.sort_by(|a, b| b.modified.cmp(&a.modified));
+    Ok(list)
+}
+
+// Превью — кадр за 2.5 с до конца (там обычно финальный фраг) и длительность из вывода ffmpeg.
+// Кэшируется рядом с клипами и пересчитывается, если клип новее превью.
+#[tauri::command]
+pub async fn clip_thumb(hlae: String, path: String) -> Result<ClipThumb, String> {
+    let src = PathBuf::from(&path);
+    let dir = src.parent().ok_or("нет папки")?.join(THUMBS);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let stem = src.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let (jpg, meta) = (dir.join(format!("{stem}.jpg")), dir.join(format!("{stem}.json")));
+    if jpg.exists() && mtime(&jpg) >= mtime(&src) {
+        if let Some(t) = fs::read_to_string(&meta).ok().and_then(|s| serde_json::from_str::<ClipThumb>(&s).ok()) {
+            return Ok(t);
+        }
+    }
+    let ff = Path::new(&hlae).parent().ok_or("неверный путь к HLAE")?.join("ffmpeg").join("bin").join("ffmpeg.exe");
+    let mut cmd = Command::new(&ff);
+    cmd.args(["-hide_banner", "-y", "-sseof", "-2.5", "-i"]).arg(&src)
+        .args(["-frames:v", "1", "-vf", "scale=640:-2", "-q:v", "4"]).arg(&jpg);
+    crate::render::no_window(&mut cmd);
+    let o = cmd.output().map_err(|e| e.to_string())?;
+    let log = String::from_utf8_lossy(&o.stderr);
+    let dur = log.split("Duration: ").nth(1).and_then(|s| s.split(',').next())
+        .map(|t| t.trim().split(':').filter_map(|x| x.parse::<f64>().ok()).fold(0.0, |acc, x| acc * 60.0 + x))
+        .unwrap_or(0.0);
+    if !jpg.exists() { return Err("ffmpeg не сделал превью".into()); }
+    let t = ClipThumb { thumb: jpg.to_string_lossy().to_string(), dur };
+    let _ = fs::write(&meta, serde_json::to_string(&t).unwrap_or_default());
+    Ok(t)
+}
+
+// Открыть проводник с выделенным файлом
+#[tauri::command]
+pub fn reveal_clip(path: String) -> Result<(), String> {
+    Command::new("explorer").arg(format!("/select,{}", path)).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+// Удаление — только в корзину Windows, чтобы клип можно было вернуть
+#[tauri::command]
+pub fn trash_clip(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    if !p.is_file() { return Err("файл не найден".into()); }
+    let escaped = path.replace('\'', "''");
+    let mut cmd = Command::new("powershell");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command",
+        &format!("Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('{escaped}', 'OnlyErrorDialogs', 'SendToRecycleBin')")]);
+    crate::render::no_window(&mut cmd);
+    let o = cmd.output().map_err(|e| e.to_string())?;
+    if p.exists() { return Err(String::from_utf8_lossy(&o.stderr).trim().to_string()); }
+    // превью удалённого клипа больше не нужно
+    if let (Some(dir), Some(stem)) = (p.parent(), p.file_stem()) {
+        let stem = stem.to_string_lossy();
+        let _ = fs::remove_file(dir.join(THUMBS).join(format!("{stem}.jpg")));
+        let _ = fs::remove_file(dir.join(THUMBS).join(format!("{stem}.json")));
+    }
+    Ok(())
+}

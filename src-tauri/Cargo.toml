@@ -1,0 +1,39 @@
+[package]
+name = "app"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+license = ""
+repository = ""
+edition = "2024"
+rust-version = "1.90"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.12.5", features = ["protocol-asset"] }
+tauri-plugin-log = "2"
+tauri-plugin-dialog = "2.8.3"
+source2-demo = { version = "0.5.10", default-features = false, features = ["cs2"] }
+ureq = "3.5.0"
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
+
+# Парсер демок без оптимизаций разбирает 160-мегабайтную демку минутами — ускоряем и в dev
+[profile.dev.package.source2-demo]
+opt-level = 3
+
+
+# Копия source2-demo с доработкой: вставка строк в строковые таблицы демки (для смены модели ножа)
+[patch.crates-io]
+source2-demo = { path = "vendor/source2-demo" }
+

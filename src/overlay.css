@@ -1,0 +1,48 @@
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Unbounded:wght@800&display=swap");
+
+/* окно прозрачное: видна только плашка */
+html.ov-root, html.ov-root body, html.ov-root #root { background: transparent !important; margin: 0; overflow: hidden; height: 100%; }
+html.ov-root body { display: flex; justify-content: center; align-items: flex-start; padding-top: 6px; box-sizing: border-box; }
+
+.ov {
+  --teal: #2ee6c0; --yellow: #f5c518; --red: #e5484d; --text: #d6dde6; --dim: #8291a4;
+  display: flex; align-items: center; gap: 16px; padding: 14px 22px 14px 16px;
+  background: rgba(9, 12, 17, .92); border: 1px solid #2c3a4b; border-left: 3px solid var(--teal);
+  color: var(--text); font-family: "JetBrains Mono", Consolas, monospace;
+  box-shadow: 0 10px 30px rgba(0,0,0,.55); animation: ov-in .45s cubic-bezier(.2,.8,.2,1.15) both;
+}
+@keyframes ov-in { from { opacity: 0; transform: translateY(-14px) scale(.96); } }
+
+/* клавиша как кейкап, пульсирует, чтобы её заметили */
+.ov-key {
+  flex: none; min-width: 64px; padding: 10px 12px; text-align: center;
+  font: 800 1.35rem "Unbounded", sans-serif; color: #07090d; background: var(--yellow);
+  border-bottom: 5px solid #b38d06; border-radius: 4px; animation: ov-press 1.6s ease-in-out infinite;
+}
+@keyframes ov-press {
+  0%, 70%, 100% { transform: translateY(0); border-bottom-width: 5px; box-shadow: 0 0 0 0 rgba(245,197,24,.5); }
+  80% { transform: translateY(3px); border-bottom-width: 2px; box-shadow: 0 0 0 10px rgba(245,197,24,0); }
+}
+.ov-text { display: flex; flex-direction: column; gap: 4px; }
+.ov-text b { font: 700 1.05rem "JetBrains Mono", monospace; }
+.ov-text em { font-style: normal; color: var(--yellow); }
+.ov-text span { font-size: .78rem; color: var(--dim); }
+
+.ov--done { padding: 12px 22px 12px 16px; }
+.ov-check {
+  flex: none; position: relative; width: 34px; height: 34px; border-radius: 50%; border: 2px solid var(--teal);
+  box-shadow: 0 0 16px rgba(46,230,192,.35); animation: ov-pop .5s cubic-bezier(.2,.8,.2,1.4) both;
+}
+.ov-check::after {
+  content: ""; position: absolute; left: 11px; top: 6px; width: 8px; height: 15px;
+  border: solid var(--teal); border-width: 0 3px 3px 0; transform: rotate(45deg);
+}
+@keyframes ov-pop { from { transform: scale(.4); opacity: 0; } }
+.ov--rec { gap: 10px; padding: 9px 16px; font-size: .85rem; border-left-color: var(--red); opacity: .9; }
+.ov--rec b { color: var(--red); letter-spacing: .1em; }
+.ov-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red); animation: ov-blink 1.2s steps(1) infinite; }
+@keyframes ov-blink { 50% { opacity: .25; } }
+.ov-bar { width: 140px; height: 4px; background: #1c2430; overflow: hidden; }
+.ov-bar i { display: block; height: 100%; background: var(--teal); transition: width .4s ease; }
+.ov-pct { color: var(--teal); min-width: 3ch; }
+.ov-hint { color: var(--dim); font-size: .75rem; }

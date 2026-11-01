@@ -1,0 +1,25 @@
+html, body {
+  margin: 0;
+  /* overflow: hidden; никаких браузерных скроллбаров окна, скролл только внутри .grid при необходимости */
+}
+
+* {
+  /* выделение текста выключено глобально; инпуты браузер всё равно
+     даёт выделять и вставлять в них текст — это системное поведение
+     form-полей и user-select на него не влияет */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+input, textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+::selection {
+  background: rgba(245, 197, 24, 0.35); /* если где-то выделение всё же разрешено — в цвет темы, не браузерный синий */
+}
+
+a { -webkit-user-drag: none; }
+img { -webkit-user-drag: none; pointer-events: none; }
