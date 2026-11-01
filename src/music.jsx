@@ -122,6 +122,48 @@ export function alignChorusToKill({ lrc, start, clip, slowmo }) {
   return s >= 0 ? { start: +s.toFixed(3), drops: [kill] } : null;
 }
 
+// Повторы глазами жертв в конце клипа, секунды (как replays в render.rs)
+function replaySecs(clip) {
+  const reps = clip.cine?.victims?.length ? clip.cine.victims.map((v) => v.kill)
+    : clip.cine?.victimSlot != null ? [clip.cine.kill] : [];
+  return reps.reduce((s, k) => s + (k + 16 - Math.max(k - 77, clip.start)) / TICKRATE, 0);
+}
+
+// Длина готового клипа: запись со всеми замедлениями плюс повторы
+export function clipOutDuration({ clip, slowmo, drops = [] }) {
+  const base = (clip.end - clip.start) / TICKRATE;
+  const kills = slowmo ? (clip.killTicks || []).map((t) => (t - clip.start) / TICKRATE) : [];
+  const segs = slowmo || drops.length ? slowmoSegments(kills, drops) : [[0, Infinity, 1]];
+  return segs.reduce((s, [a, b, sp]) => s + (Math.min(b, base) - Math.min(a, base)) / sp, 0) + replaySecs(clip);
+}
+
+// Переход между клипами в склеенном ролике, секунды (тот же REEL_XFADE в render.rs)
+export const REEL_XFADE = 0.35;
+
+// Склейка в один ролик: песня идёт через все клипы без перескоков. Каждый клип начинается с того
+// места трека, где закончился предыдущий (минус переход, в нём клипы накладываются). Припев на
+// последний килл — на последнем клипе ролика. Трек плавно появляется только в первом клипе
+// и уходит только в последнем.
+export function chainMusic({ clips, lrc, start, slowmo, chorusSlow, chorusOnKill }) {
+  const last = clips[clips.length - 1];
+  const target = chorusSlow && chorusOnKill && lrc ? alignChorusToKill({ lrc, start, clip: last, slowmo }) : null;
+  let base = start;
+  // замедления меняют длину клипов, поэтому начало подбираем в пару проходов
+  for (let pass = 0; pass < 3; pass++) {
+    let s = base;
+    clips.forEach((c, i) => {
+      c.musicStart = +s.toFixed(3);
+      c.drops = i === clips.length - 1 && target ? target.drops
+        : chorusSlow && lrc ? chorusDrops({ lrc, start: s, clip: c, slowmo }) : [];
+      c.musicFadeIn = i === 0;
+      c.musicFadeOut = i === clips.length - 1;
+      s += clipOutDuration({ clip: c, slowmo, drops: c.drops }) - REEL_XFADE;
+    });
+    if (!target) break;
+    base = Math.max(0, base + (target.start - last.musicStart));
+  }
+}
+
 // Замедление на припеве: ищем в записи такой момент c, чтобы в готовом видео (со всеми
 // замедлениями, включая собственное) он пришёлся ровно на начало припева в треке.
 // Возвращает [c] в секундах записи клипа или [], если припев в этот клип не попадает.
@@ -205,7 +247,7 @@ function layoutParts(lines) {
 // Возвращает, где строка на экране (доли кадра) — туда тянется камера в паузах.
 function drawPart(ctx, p, t, cam, proj, k, pi, style, mul) {
   const st = lyricStyle(style);
-  const centered = st.screen || p.center;
+  const centered = st.screen;
   // yaw растёт влево: точка левее взгляда имеет rel > 0 и на экране левее центра
   const rel = wrap(p.yaw - cam.yaw);
   if (Math.abs(rel) > 75 && !centered) return null;
@@ -215,11 +257,10 @@ function drawPart(ctx, p, t, cam, proj, k, pi, style, mul) {
   const sc = Math.max(0, Math.min(1, (t - (p.end - 0.6)) / 0.6));
   // слова на ударах трека (стили со snap)
   const words = st.snap ? snapWords(wordsOf(p), p.beats) : wordsOf(p);
-  // строка в центре экрана (долгая пауза) — крупнее и без поворота к камере
   const m = centered
     ? [1, 0, 0, 1, x, y]
     : [1 - Math.min(Math.abs(rel), 60) / 260, Math.sin((rel * Math.PI) / 180) * 0.12, 0, 1, x, y];
-  const size = 40 * k * (p.center && !st.screen ? 1.45 : 1);
+  const size = 40 * k;
   ctx.save(); mul?.save();
   ctx.setTransform(...m); mul?.setTransform(...m);
   drawLyricStyle(ctx, style, { p, t, size, k, pi, sc, words, maxW: proj.cx * 1.7, mul });
@@ -231,13 +272,15 @@ const pngOf = (canvas) => new Promise((ok, fail) =>
   canvas.toBlob((b) => (b ? b.arrayBuffer().then((a) => ok(new Uint8Array(a)), fail) : fail(new Error("canvas.toBlob"))), "image/png"));
 
 // Умная подача: секунды киллов на итоговой шкале клипа (после slow-mo)
-const KILL_BEFORE = 0.9, KILL_AFTER = 0.7, QUIET_CENTER = 4;
+const KILL_BEFORE = 0.9, KILL_AFTER = 0.7;
+// зум к строке: только если вокруг неё столько тихих секунд и не чаще чем раз в ZOOM_GAP секунд
+const ZOOM_QUIET = 2.5, ZOOM_GAP = 5;
 
 // Кадры текста песни для одного клипа. Текст «закреплён» в мире: строка появляется левее/правее
 // взгляда и остаётся на месте, когда камера поворачивается (углы — из демки, cam: [[tick, pitch, yaw]]).
 // Время — итоговое (после slow-mo): музыка не замедляется, а камера берётся из записи через outToIn.
 // smart — умная подача: строки, на которые приходится килл, пропускаются (кроме припева), в паузах
-// камера тянется к строке (zoom.json для ffmpeg), в долгих паузах строка встаёт по центру.
+// камера иногда коротко тянется вбок к строке (zoom.json для ffmpeg).
 // Для стилей с multiply рядом пишется второй слой кадров (m*.png, lyrics_mul.ffconcat).
 export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo, drops = [], fov, fps, W, H, save, onFrame, style = "karaoke", beats = [], smart = true }) {
   const st = lyricStyle(style);
@@ -253,9 +296,7 @@ export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo,
   const kills = slowmo ? killRec : [];
   const segs = slowmo || drops.length ? slowmoSegments(kills, drops) : [[0, Infinity, 1]];
   // + повторы глазами жертв в конце клипа (как replays в render.rs)
-  const reps = clip.cine?.victims?.length ? clip.cine.victims.map((v) => v.kill)
-    : clip.cine?.victimSlot != null ? [clip.cine.kill] : [];
-  const replay = reps.reduce((s, k) => s + (k + 16 - Math.max(k - 77, clip.start)) / TICKRATE, 0);
+  const replay = replaySecs(clip);
   const mainDur = segs.reduce((s, [a, b, sp]) => s + (Math.min(b, base) - Math.min(a, base)) / sp, 0);
   const dur = mainDur + replay;
 
@@ -270,11 +311,16 @@ export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo,
       const after = Math.min(dur, ...action.filter(([x]) => x >= b).map(([x]) => x));
       return after - before;
     };
-    for (const pt of parts) {
+    // камера тянется к строке редко: только в настоящей паузе и не чаще раза в ZOOM_GAP секунд
+    let lastZoom = -Infinity;
+    for (const pt of [...parts].sort((x, y) => x.t0 - y.t0)) {
       const a = pt.t0 - start, b = pt.end - start;
       pt.hide = !pt.chorus && busy(a, b);
-      pt.quiet = !busy(a, b);
-      pt.center = pt.quiet && !st.screen && quiet(a, b) >= QUIET_CENTER;
+      pt.zoom = false;
+      if (!busy(a, b) && quiet(a, b) >= ZOOM_QUIET && a - lastZoom >= ZOOM_GAP && pt.side) {
+        pt.zoom = true;
+        lastZoom = a;
+      }
     }
   }
 
@@ -314,8 +360,8 @@ export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo,
       p.pitch = anchors[p.li].pitch;
     }
     let live = parts.filter((p) => !p.hide && tTrack >= p.t0 && tTrack < p.end);
-    // экранный стиль или строка по центру показывает одно: только самую свежую строку
-    if ((st.screen || live.some((p) => p.center)) && live.length > 1) live = [live.reduce((a, b) => (b.t0 > a.t0 ? b : a))];
+    // экранный стиль показывает одно слово: только самую свежую строку
+    if (st.screen && live.length > 1) live = [live.reduce((a, b) => (b.t0 > a.t0 ? b : a))];
     let name, mname;
     if (!live.length) {
       if (!blank) { ctx.clearRect(0, 0, W, H); blank = "blank.png"; await save(blank, await pngOf(canvas)); }
@@ -328,7 +374,7 @@ export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo,
       live.forEach((p) => {
         const at = drawPart(ctx, p, tTrack, view, proj, k, parts.indexOf(p), style, mctx);
         // камера тянется к строке в паузах (первое место, где строка появилась)
-        if (smart && at && p.quiet && !zoom.has(p.li)) zoom.set(p.li, [p.t0 - start, p.end - start, at.x, at.y]);
+        if (smart && at && p.zoom && !zoom.has(p.li)) zoom.set(p.li, [p.t0 - start, p.end - start, at.x, at.y]);
       });
       name = `f${String(n).padStart(5, "0")}.png`;
       await save(name, await pngOf(canvas));
