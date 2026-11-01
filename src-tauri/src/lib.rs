@@ -28,6 +28,7 @@ pub fn run() {
       music::track_info,
       music::locate_hlae,
       music::read_audio,
+      music::track_beats,
       music::lyrics_search,
       skins::scan_items,
       skins::rewrite_skins,

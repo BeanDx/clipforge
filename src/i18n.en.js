@@ -527,4 +527,7 @@ export default {
   "Буквы - светящиеся розовые трубки. Слово загорается с мерцанием, когда его поют, а в конце строки буквы гаснут по одной.": "Letters are glowing pink tubes. A word lights up with a flicker when it's sung, and at the end of the line the letters go dark one by one.",
   "Буквы печатаются по одной на темной ленте, с мигающим курсором. В конце строка стирается справа налево, как Backspace.": "Letters are typed one by one on a dark strip with a blinking cursor. At the end the line is erased right to left, like Backspace.",
   "Слово появляется с RGB-разъездом и рваными полосами, потом встает ровно. В конце строки текст разрывает на полосы, и он исчезает.": "Each word glitches in with an RGB split and torn slices, then settles. At the end of the line the text tears into slices and disappears.",
+  "Акцент": "Accent",
+  "одно слово крупно, акценты красным, под бит": "one big word at a time, red accents, on beat",
+  "Как в TikTok-эдитах: по одному слову крупно в центре экрана, с объемной тенью. Слова сменяются ровно на ударах трека, буквы собираются вразнобой. Ударные слова огромные и темно-красные: весь припев и самое длинное слово каждой строки.": "Like TikTok edits: one big word at a time in the middle of the screen, with a 3D shadow. Words switch exactly on the track's beats and the letters snap together out of order. Accent words are huge and dark red: the whole chorus and the longest word of every line.",
 };

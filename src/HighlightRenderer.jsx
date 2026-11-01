@@ -11,6 +11,7 @@ import { fontsReady, renderHudFrames } from "./hud";
 import { SkinsPanel, planForRust, planIsEmpty } from "./skins";
 import { MusicPanel, MUSIC_DEFAULT, renderLyricFrames, chorusDrops, alignChorusToKill } from "./music";
 import { orbitPath } from "./cine";
+import { lyricStyle } from "./lyricStyles";
 import { MatchDossier, infoSummary, mapName, mapTint } from "./dossier";
 import { drawCard } from "./card";
 import { CompareModal } from "./compare";
@@ -746,9 +747,14 @@ const voicePayload = useMemo(() => {
           stopped();
           const dir = await join(work, `lyr_${i}`);
           const save = (name, bytes) => invoke("save_file", bytes, { headers: { "x-path": encodeURIComponent(`${dir}\\${name}`) } });
+          // для стилей «под бит» слова встают на удары трека: находим их в куске под этот клип
+          const lyricStart = sel[i].musicStart ?? music.start;
+          const beats = lyricStyle(music.lyricStyle).snap
+            ? (await invoke("track_beats", { hlae: paths.hlae, path: music.path, offset: lyricStart, dur: 120 }).catch(() => [])).map((b) => lyricStart + b)
+            : [];
           const list = await renderLyricFrames({
             lrc: music.lrc, start: sel[i].musicStart ?? music.start, clip: sel[i], cam: cams[i] || [], slowmo: fx.slowmo, drops: sel[i].drops || [], fov, fps,
-            W: width, H: height, save, style: music.lyricStyle,
+            W: width, H: height, save, style: music.lyricStyle, beats,
             onFrame: (f, n) => { stopped(); setStage(tr("текст песни: клип {0}/{1} · {2}%", i + 1, sel.length, Math.round((f / n) * 100))); },
           });
           await save("lyrics.ffconcat", new TextEncoder().encode(list));
