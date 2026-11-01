@@ -105,3 +105,56 @@ pub fn trash_clip(path: String) -> Result<(), String> {
     }
     Ok(())
 }
+
+// Матчи, скачанные в CS2 («Смотреть» → «Ваши матчи»): игра кладет их в game\csgo\replays
+#[derive(Serialize)]
+pub struct Replay {
+    pub path: String,
+    pub size: u64,
+    pub modified: u64,
+    pub map: String,
+}
+
+// Карта есть в заголовке демки (первые байты, protobuf): ищем «de_…», «cs_…», «ar_…»,
+// длина строки — в байте перед ней (сразу за строкой может идти байт, похожий на букву)
+fn demo_map(p: &Path) -> String {
+    use std::io::Read;
+    let mut buf = vec![0u8; 4096];
+    let n = fs::File::open(p).and_then(|mut f| f.read(&mut buf)).unwrap_or(0);
+    let s = &buf[..n];
+    for i in 1..s.len().saturating_sub(4) {
+        if [b"de_", b"cs_", b"ar_"].iter().any(|pre| s[i..].starts_with(*pre)) {
+            let len = s[i - 1] as usize;
+            if (4..=48).contains(&len) && i + len <= s.len()
+                && s[i..i + len].iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_') {
+                return String::from_utf8_lossy(&s[i..i + len]).into_owned();
+            }
+        }
+    }
+    String::new()
+}
+
+#[tauri::command]
+pub fn list_replays(cs2: String) -> Vec<Replay> {
+    // cs2.exe лежит в game\bin\win64 — поднимаемся до game\
+    let Some(game) = Path::new(&cs2).ancestors().nth(3) else { return vec![] };
+    let Ok(rd) = fs::read_dir(game.join("csgo").join("replays")) else { return vec![] };
+    let mut v: Vec<Replay> = rd.flatten().map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("dem")))
+        .map(|p| Replay {
+            size: fs::metadata(&p).map_or(0, |m| m.len()),
+            modified: mtime(&p),
+            map: demo_map(&p),
+            path: p.to_string_lossy().into_owned(),
+        })
+        .collect();
+    v.sort_by(|a, b| b.modified.cmp(&a.modified));
+    v
+}
+
+#[tauri::command]
+pub fn open_replays(cs2: String) -> Result<(), String> {
+    let dir = Path::new(&cs2).ancestors().nth(3).ok_or("нет пути к CS2")?.join("csgo").join("replays");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Command::new("explorer").arg(dir).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
