@@ -19,6 +19,7 @@ import { Gallery } from "./gallery";
 import shotHudMatch from "./assets/previews/hud-match.webp";
 import shotHudDemo from "./assets/previews/hud-demo.webp";
 import "./highlight-renderer.css";
+import { version as APP_VERSION } from "../package.json";
 
 import { tr, trError, getLang, setLang, useLang } from "./i18n";
 const TABS = ["Демо", "Архив", "Хайлайты", "Рендер", "Очередь", "Библиотека", "Настройки"];
@@ -978,7 +979,7 @@ const voicePayload = useMemo(() => {
 
           <Frame title={tr("О приложении")} meta="clipforge">
             <div className="about">
-              <div className="about__row"><span className="mono dim">{tr("версия")}</span><span className="mono">0.1.0-dev</span></div>
+              <div className="about__row"><span className="mono dim">{tr("версия")}</span><span className="mono">{APP_VERSION}</span></div>
               <div className="about__row"><span className="mono dim">{tr("движок записи")}</span><span className="mono">HLAE + ffmpeg</span></div>
               <div className="about__row"><span className="mono dim">{tr("парсер демок")}</span><span className="mono">demoparser2</span></div>
             </div>
