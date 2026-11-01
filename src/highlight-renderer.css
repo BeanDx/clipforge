@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Rajdhani:wght@500;600;700&family=Unbounded:wght@800&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Rajdhani:wght@500;600;700&family=Unbounded:wght@800&family=Rubik:wght@800&family=Comfortaa:wght@700&family=PT+Mono&family=Russo+One&display=swap");
 
 .app {
   --bg: #07090d;
@@ -1162,3 +1162,30 @@
 .events button.mo.is-picked { border-color: var(--teal); background: rgba(46,230,192,.05); }
 
 .lang-pick { max-width: 360px; }
+
+/* стиль текста песни: строка с текущим стилем раскрывает список */
+.ly-pick { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 8px; }
+.ly-head {
+  display: flex; align-items: center; gap: 14px; padding: 9px 14px; border: 1px solid var(--line-hi);
+  background: rgba(12,16,22,.6); text-align: left; transition: border-color var(--t), background-color var(--t);
+}
+.ly-head:hover, .ly-head.is-open { border-color: var(--teal); }
+.ly-head .mono { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; }
+.ly-head b { font-size: 1.05rem; color: var(--text); }
+.ly-caret { margin-left: auto; width: 9px; height: 9px; border: solid var(--teal); border-width: 0 2px 2px 0; transform: translateY(-2px) rotate(45deg); transition: transform .25s var(--ease); }
+.ly-head.is-open .ly-caret { transform: translateY(2px) rotate(-135deg); }
+.ly-list { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .3s var(--ease), opacity .2s; }
+.ly-list.is-open { grid-template-rows: 1fr; opacity: 1; }
+.ly-list > div { min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 4px; }
+.ly-list.is-open > div { overflow: visible; }
+.ly-item {
+  display: grid; grid-template-columns: minmax(150px, auto) 1fr auto auto; align-items: center; gap: 12px;
+  padding: 8px 14px; border: 1px solid var(--line); text-align: left;
+  transition: border-color var(--t), background-color var(--t), transform var(--t) var(--ease);
+}
+.ly-item:hover { border-color: var(--line-hi); transform: translateX(3px); }
+.ly-item.is-on { border-color: var(--teal); background: rgba(46,230,192,.05); }
+.ly-item b { font-size: 1.05rem; color: var(--text); white-space: nowrap; }
+.ly-item .dim { font-size: .8rem; }
+.ly-item .check { margin-left: 0; }
+.ly-canvas { display: block; width: 100%; height: 100%; }

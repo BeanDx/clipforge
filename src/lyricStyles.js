@@ -1,0 +1,250 @@
+// Стили текста песни. Общее для всех: кусок строки «висит» в мире (drawPart считает, куда он попал
+// на экране, и разворачивает к камере), а стиль рисует слова в своей системе координат: центр
+// строки — (0, 0). У каждого стиля свой шрифт, появление слов, подсветка спетого и исчезновение
+// в конце строки. sc — доля исчезновения (0..1, последние 0.6 с строки).
+export const LYRIC_STYLES = [
+  { id: "karaoke", short: "желтая плашка, слова выпрыгивают", label: "Караоке", font: '"Unbounded"', weight: 800,
+    help: "Слова выпрыгивают по одному, текущее заливается желтой плашкой слева направо. В конце строки буквы рассыпаются вниз." },
+  { id: "world", short: "белые буквы закрашиваются по одной", label: "World", font: '"Rubik"', weight: 800,
+    help: "Вся строка сразу висит в мире полупрозрачной, а спетые буквы по одной становятся сплошными белыми. В конце буквы растворяются вверх." },
+  { id: "neon", short: "светящиеся трубки с мерцанием", label: "Неон", font: '"Comfortaa"', weight: 700,
+    help: "Буквы - светящиеся розовые трубки. Слово загорается с мерцанием, когда его поют, а в конце строки буквы гаснут по одной." },
+  { id: "typewriter", short: "печать с курсором на ленте", label: "Печатная машинка", font: '"PT Mono"', weight: 400,
+    help: "Буквы печатаются по одной на темной ленте, с мигающим курсором. В конце строка стирается справа налево, как Backspace." },
+  { id: "glitch", short: "RGB-разъезд и рваные полосы", label: "Глитч", font: '"Russo One"', weight: 400,
+    help: "Слово появляется с RGB-разъездом и рваными полосами, потом встает ровно. В конце строки текст разрывает на полосы, и он исчезает." },
+];
+export const lyricStyle = (id) => LYRIC_STYLES.find((s) => s.id === id) || LYRIC_STYLES[0];
+export const lyricFont = (id, px) => { const s = lyricStyle(id); return `${s.weight} ${px}px ${s.font}, "Segoe UI", sans-serif`; };
+
+const rnd = (n) => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+const clamp01 = (x) => Math.max(0, Math.min(1, x));
+const easeOutBack = (x) => { const c = 1.9; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// Слова куска с таймингом: время звучания [t0, t1] делится между словами по их длине
+export function wordsOf(p) {
+  const words = p.text.split(/\s+/).filter(Boolean);
+  const total = words.reduce((s, w) => s + w.length + 1, 0);
+  let acc = 0;
+  return words.map((w) => {
+    const ws = p.t0 + ((p.t1 - p.t0) * acc) / total;
+    acc += w.length + 1;
+    return { w, ws, we: p.t0 + ((p.t1 - p.t0) * acc) / total };
+  });
+}
+
+// раскладка строки: слова с шириной и позициями букв (центр строки — 0)
+function layout(ctx, words, space) {
+  const widths = words.map((w) => ctx.measureText(w.w).width);
+  const total = widths.reduce((s, w) => s + w, 0) + space * (words.length - 1);
+  let x = -total / 2;
+  return { total, words: words.map((wd, i) => {
+    const out = { ...wd, x, ww: widths[i], letters: [] };
+    let lx = x;
+    for (let c = 0; c < wd.w.length; c++) {
+      const cw = ctx.measureText(wd.w[c]).width;
+      // время буквы: слово звучит [ws, we], буквы по очереди
+      out.letters.push({ ch: wd.w[c], x: lx, cw, at: wd.ws + ((wd.we - wd.ws) * c) / wd.w.length });
+      lx += cw;
+    }
+    x += widths[i] + space;
+    return out;
+  }) };
+}
+
+// ---- Караоке: выпрыгивающие слова, желтая плашка, рассыпание вниз ----
+function karaoke(ctx, { p, t, size, k, pi, sc, words }) {
+  ctx.font = lyricFont("karaoke", size);
+  const L = layout(ctx, words, size * 0.32);
+  L.words.forEach((wd, wi) => {
+    if (t < wd.ws) return;
+    const active = sc === 0 && t < wd.we && t < p.t1 + 0.05;
+    const pop = easeOutBack(Math.min(1, (t - wd.ws) / 0.18));
+    ctx.save();
+    ctx.translate(wd.x + wd.ww / 2, 0);
+    ctx.scale(0.6 + 0.4 * pop, 0.6 + 0.4 * pop);
+    if (active) {
+      const fill = Math.min(1, (t - wd.ws) / Math.max(wd.we - wd.ws, 0.05));
+      const px = size * 0.28, ph = size * 1.35;
+      ctx.shadowColor = "rgba(245,197,24,.55)";
+      ctx.shadowBlur = 18 * k;
+      roundRect(ctx, -wd.ww / 2 - px, -ph / 2, wd.ww + px * 2, ph, size * 0.22);
+      ctx.fillStyle = "rgba(245,197,24,.28)";
+      ctx.fill();
+      ctx.save();
+      ctx.clip();
+      ctx.fillStyle = "#f5c518";
+      ctx.fillRect(-wd.ww / 2 - px, -ph / 2, (wd.ww + px * 2) * fill, ph);
+      ctx.restore();
+      ctx.shadowBlur = 0;
+    }
+    ctx.shadowColor = "rgba(0,0,0,.8)";
+    ctx.shadowBlur = active ? 0 : 14 * k;
+    wd.letters.forEach((l, c) => {
+      const seed = pi * 997 + wi * 61 + c * 13;
+      const e = sc * sc;
+      ctx.save();
+      ctx.translate(l.x - wd.x - wd.ww / 2 + l.cw / 2 + (rnd(seed) - 0.5) * 2.4 * size * sc,
+        (rnd(seed + 1) * 0.8 + 0.3) * size * sc + e * size * 1.8);
+      ctx.rotate((rnd(seed + 2) - 0.5) * 2.6 * sc);
+      ctx.globalAlpha = 1 - Math.pow(sc, 1.2);
+      ctx.fillStyle = active ? "#0b0d11" : "#ffffff";
+      ctx.fillText(l.ch, -l.cw / 2, 0);
+      ctx.restore();
+    });
+    ctx.restore();
+  });
+}
+
+// ---- World: строка видна сразу полупрозрачной, спетые буквы становятся сплошными ----
+function world(ctx, { p, t, size, k, pi, sc, words }) {
+  const fs = size * 1.08;
+  ctx.font = lyricFont("world", fs);
+  const L = layout(ctx, words, fs * 0.3);
+  const appear = clamp01((t - p.t0) / 0.22);
+  ctx.translate(0, (1 - appear) * fs * 0.25);
+  ctx.shadowColor = "rgba(0,0,0,.45)";
+  ctx.shadowBlur = 10 * k;
+  L.words.forEach((wd, wi) => wd.letters.forEach((l, c) => {
+    const seed = pi * 991 + wi * 53 + c * 17;
+    // растворение: буквы по очереди со случайной задержкой уходят вверх и тают
+    const d = clamp01((sc - rnd(seed) * 0.45) / 0.55);
+    const lit = t >= l.at;
+    const flash = lit ? clamp01((t - l.at) / 0.09) : 1; // «щелчок» при закрашивании
+    ctx.save();
+    ctx.translate(l.x + l.cw / 2, -d * fs * 0.6);
+    const s = lit ? 1.14 - 0.14 * flash : 1;
+    ctx.scale(s, s);
+    ctx.globalAlpha = appear * (1 - d) * (lit ? 1 : 0.32);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(l.ch, -l.cw / 2, 0);
+    ctx.restore();
+  }));
+}
+
+// ---- Неон: контур-трубка, спетое загорается с мерцанием, в конце гаснет по буквам ----
+function neon(ctx, { p, t, size, k, pi, sc, words }) {
+  const fs = size * 1.3;
+  ctx.font = lyricFont("neon", fs);
+  const up = words.map((w) => ({ ...w, w: w.w.toUpperCase() }));
+  const L = layout(ctx, up, fs * 0.28);
+  const appear = clamp01((t - p.t0) / 0.3);
+  ctx.lineJoin = "round";
+  L.words.forEach((wd, wi) => wd.letters.forEach((l, c) => {
+    const seed = pi * 983 + wi * 59 + c * 19;
+    // гаснет: у каждой буквы свой момент, перед ним пара вспышек
+    const off = 0.15 + rnd(seed) * 0.7;
+    const dying = sc > off - 0.12 && sc < off ? (rnd(seed + Math.floor(t * 40)) > 0.5 ? 1 : 0.15) : sc >= off ? 0 : 1;
+    const lit = t >= wd.ws;
+    // загорание: первые 0.18 с слова лампа «дергается»
+    const ign = lit && t - wd.ws < 0.18 ? (rnd(seed + Math.floor(t * 50)) > 0.35 ? 1 : 0.2) : 1;
+    const a = appear * dying;
+    if (a <= 0) return;
+    ctx.save();
+    ctx.translate(l.x, 0);
+    if (lit) {
+      ctx.globalAlpha = a * ign;
+      ctx.shadowColor = "#ff3dc8";
+      ctx.shadowBlur = 26 * k;
+      ctx.strokeStyle = "#ff6ad5";
+      ctx.lineWidth = 3.2 * k;
+      ctx.strokeText(l.ch, 0, 0);
+      ctx.shadowBlur = 12 * k;
+      ctx.fillStyle = "#ffe6f7";
+      ctx.fillText(l.ch, 0, 0);
+    } else {
+      ctx.globalAlpha = a * 0.55;
+      ctx.strokeStyle = "rgba(255,110,210,.45)";
+      ctx.lineWidth = 1.6 * k;
+      ctx.strokeText(l.ch, 0, 0);
+    }
+    ctx.restore();
+  }));
+}
+
+// ---- Печатная машинка: буквы печатаются на ленте с курсором, в конце стираются ----
+function typewriter(ctx, { p, t, size, k, sc, words }) {
+  const fs = size * 0.95;
+  ctx.font = lyricFont("typewriter", fs);
+  const L = layout(ctx, words, fs * 0.6);
+  const all = L.words.flatMap((w) => w.letters);
+  // сколько букв видно: напечатанные минус стертые Backspace'ом в конце
+  const typed = all.filter((l) => t >= l.at).length;
+  const shown = Math.max(0, Math.round(typed * (1 - sc)));
+  if (!shown && sc > 0) return;
+  const vis = all.slice(0, shown);
+  const right = vis.length ? vis[vis.length - 1].x + vis[vis.length - 1].cw : all[0]?.x ?? 0;
+  const left = all[0]?.x ?? 0;
+  const padX = fs * 0.35, h = fs * 1.45;
+  ctx.fillStyle = "rgba(8,10,14,.72)";
+  ctx.fillRect(left - padX, -h / 2, right - left + padX * 2 + fs * 0.6, h);
+  ctx.fillStyle = "#f2f2ea";
+  ctx.shadowColor = "rgba(0,0,0,.6)";
+  ctx.shadowBlur = 4 * k;
+  vis.forEach((l) => ctx.fillText(l.ch, l.x, 0));
+  // курсор мигает 2 раза в секунду, пока строка звучит
+  if (Math.floor(t * 4) % 2 === 0 || t < p.t1) {
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "#f5c518";
+    ctx.fillRect(right + fs * 0.08, -fs * 0.45, fs * 0.45, fs * 0.9);
+  }
+}
+
+// ---- Глитч: RGB-разъезд и рваные полосы при появлении, в конце разрывает ----
+function glitch(ctx, { p, t, size, k, pi, sc, words }) {
+  const fs = size * 1.2;
+  ctx.font = lyricFont("glitch", fs);
+  const up = words.map((w) => ({ ...w, w: w.w.toUpperCase() }));
+  const L = layout(ctx, up, fs * 0.25);
+  L.words.forEach((wd, wi) => {
+    if (t < wd.ws) return;
+    const g = Math.max(1 - (t - wd.ws) / 0.28, sc); // сила глитча: на входе и на выходе
+    const alpha = 1 - Math.pow(sc, 1.5);
+    const tick = Math.floor(t * 30);
+    const split = g * fs * 0.12;
+    const bands = 5;
+    for (let b = 0; b < bands; b++) {
+      const y0 = -fs * 0.6 + (fs * 1.2 * b) / bands, bh = (fs * 1.2) / bands;
+      const shift = (rnd(pi * 977 + wi * 41 + b * 7 + tick) - 0.5) * 2 * g * fs * 0.5;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(wd.x - fs, y0, wd.ww + fs * 2, bh + 0.5);
+      ctx.clip();
+      ctx.translate(shift, 0);
+      ctx.globalAlpha = alpha;
+      if (split > 0.5) {
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = "rgba(255,40,80,.85)";
+        ctx.fillText(wd.w, wd.x - split, 0);
+        ctx.fillStyle = "rgba(40,230,255,.85)";
+        ctx.fillText(wd.w, wd.x + split, 0);
+        ctx.globalCompositeOperation = "source-over";
+      }
+      ctx.shadowColor = "rgba(0,0,0,.6)";
+      ctx.shadowBlur = 8 * k;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(wd.w, wd.x, 0);
+      ctx.restore();
+    }
+  });
+}
+
+const DRAW = { karaoke, world, neon, typewriter, glitch };
+
+// Рисует кусок строки стилем style в уже настроенной системе координат (центр строки — 0, 0)
+export function drawLyricStyle(ctx, style, args) {
+  ctx.save();
+  ctx.textBaseline = "middle";
+  (DRAW[style] || karaoke)(ctx, args);
+  ctx.restore();
+}

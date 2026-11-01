@@ -748,7 +748,7 @@ const voicePayload = useMemo(() => {
           const save = (name, bytes) => invoke("save_file", bytes, { headers: { "x-path": encodeURIComponent(`${dir}\\${name}`) } });
           const list = await renderLyricFrames({
             lrc: music.lrc, start: sel[i].musicStart ?? music.start, clip: sel[i], cam: cams[i] || [], slowmo: fx.slowmo, drops: sel[i].drops || [], fov, fps,
-            W: width, H: height, save,
+            W: width, H: height, save, style: music.lyricStyle,
             onFrame: (f, n) => { stopped(); setStage(tr("текст песни: клип {0}/{1} · {2}%", i + 1, sel.length, Math.round((f / n) * 100))); },
           });
           await save("lyrics.ffconcat", new TextEncoder().encode(list));
@@ -1278,7 +1278,7 @@ const voicePayload = useMemo(() => {
                     ))}
                   </div>
                   <hr className="sep" />
-                  <MusicPanel music={music} setMusic={setMusic} hlae={paths.hlae} clipLen={clipLen} Toggle={Toggle} />
+                  <MusicPanel music={music} setMusic={setMusic} hlae={paths.hlae} clipLen={clipLen} Toggle={Toggle} Hint={Hint} />
                 </>
               )}
 
