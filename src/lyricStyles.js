@@ -14,8 +14,8 @@ export const LYRIC_STYLES = [
   { id: "glitch", short: "RGB-разъезд и рваные полосы", label: "Глитч", font: '"Russo One"', weight: 400,
     help: "Слово появляется с RGB-разъездом и рваными полосами, потом встает ровно. В конце строки текст разрывает на полосы, и он исчезает." },
   { id: "accent", short: "одно слово крупно, акценты красным, под бит", label: "Акцент", font: '"Oswald"', weight: 700,
-    screen: true, snap: true,
-    help: "Как в TikTok-эдитах: по одному слову крупно в центре экрана, с объемной тенью. Слова сменяются ровно на ударах трека, буквы собираются вразнобой. Ударные слова огромные и темно-красные: весь припев и самое длинное слово каждой строки." },
+    screen: true, snap: true, multiply: true, extraFonts: ['800 40px "Rubik"'],
+    help: "Как в TikTok-эдитах: по одному слову крупно в центре экрана. Слова сменяются ровно на ударах трека, буквы собираются вразнобой. Ударные слова огромные темно-красные и окрашивают саму карту, так что сквозь них видно текстуру: это весь припев и самое длинное слово каждой строки. Остальные слова белые, светятся и подсвечивают карту." },
 ];
 export const lyricStyle = (id) => LYRIC_STYLES.find((s) => s.id === id) || LYRIC_STYLES[0];
 export const lyricFont = (id, px) => { const s = lyricStyle(id); return `${s.weight} ${px}px ${s.font}, "Segoe UI", sans-serif`; };
@@ -242,18 +242,15 @@ function glitch(ctx, { p, t, size, k, pi, sc, words }) {
   });
 }
 
-// ---- Акцент: одно слово крупно в центре экрана, объемная тень, акцентные слова красные ----
-// Рисуется в центре экрана (screen: true), а не в мире; слова встают на удары трека (snap: true).
-function accentWord(ctx, wd, { red, fs, k, alpha, enter, seed, maxW }) {
-  const text = wd.w.toUpperCase();
-  ctx.font = lyricFont("accent", fs);
-  // слово не шире кадра
+// ---- Акцент: одно слово крупно в центре экрана ----
+// Ударные слова — тёмно-красные и «берут текстуру карты»: их рисуем на слое умножения (mul, белый фон),
+// ffmpeg перемножает его с видео, и сквозь буквы видны стены и пол. В превью слоя нет — там то же
+// самое даёт режим наложения multiply прямо на картинке. Обычные слова — округлым шрифтом, белые,
+// со свечением, световым пятном и лучами, будто подсвечивают карту.
+const WHITE_FONT = (px) => `800 ${px}px "Rubik", "Segoe UI", sans-serif`;
+
+function letterStates(ctx, text, enter, seed) {
   const w0 = ctx.measureText(text).width;
-  const fit = Math.min(1, maxW / Math.max(w0, 1));
-  const punch = 1 + 0.12 * (1 - clamp01(enter / 0.16)); // лёгкий удар при появлении
-  ctx.save();
-  ctx.scale(fit * punch, fit * punch);
-  // буквы собираются вразнобой: своя задержка, своя стартовая величина
   let x = -w0 / 2;
   const letters = [...text].map((ch, c) => {
     const cw = ctx.measureText(ch).width;
@@ -263,34 +260,91 @@ function accentWord(ctx, wd, { red, fs, k, alpha, enter, seed, maxW }) {
     x += cw;
     return l;
   }).filter((l) => l.a > 0);
-  const depth = Math.max(2, Math.round(fs * 0.07));
-  const g = ctx.createLinearGradient(0, -fs * 0.45, 0, fs * 0.45);
-  if (red) { g.addColorStop(0, "#ff3b3b"); g.addColorStop(0.55, "#d3121c"); g.addColorStop(1, "#7e0710"); }
-  else { g.addColorStop(0, "#ffffff"); g.addColorStop(1, "#d8dbe0"); }
-  // два прохода: сначала объём всех букв (тёмные копии вниз-вправо), потом лицевая сторона —
-  // иначе объём следующей буквы ложился бы поверх предыдущей
-  for (const pass of [0, 1]) {
-    for (const l of letters) {
-      ctx.save();
-      ctx.translate(l.cx, 0);
-      ctx.scale(l.s, l.s);
-      ctx.globalAlpha = alpha * l.a;
-      if (pass === 0) {
-        ctx.fillStyle = red ? "#2a0306" : "rgba(10,10,12,.85)";
-        for (let i = depth; i >= 1; i--) ctx.fillText(l.ch, -l.cw / 2 + i * 0.7, i);
-      } else {
-        ctx.shadowColor = "rgba(0,0,0,.55)";
-        ctx.shadowBlur = 14 * k;
-        ctx.fillStyle = g;
-        ctx.fillText(l.ch, -l.cw / 2, 0);
-      }
-      ctx.restore();
-    }
+  return { w0, letters };
+}
+
+function eachLetter(ctx, letters, alpha, draw) {
+  for (const l of letters) {
+    ctx.save();
+    ctx.translate(l.cx, 0);
+    ctx.scale(l.s, l.s);
+    ctx.globalAlpha = alpha * l.a;
+    draw(l);
+    ctx.restore();
   }
+}
+
+function redWord(ctx, mul, text, { fs, k, alpha, enter, seed, maxW }) {
+  // на слое умножения (или на самой картинке в превью)
+  const target = mul || ctx;
+  target.save();
+  target.textBaseline = "middle";
+  if (!mul) target.globalCompositeOperation = "multiply";
+  target.font = lyricFont("accent", fs);
+  const { w0, letters } = letterStates(target, text, enter, seed);
+  const fit = Math.min(1, maxW / Math.max(w0, 1));
+  const punch = 1 + 0.12 * (1 - clamp01(enter / 0.16));
+  target.scale(fit * punch, fit * punch);
+  const depth = Math.max(2, Math.round(fs * 0.07));
+  const g = target.createLinearGradient(0, -fs * 0.45, 0, fs * 0.45);
+  g.addColorStop(0, "#ff5a4a"); g.addColorStop(0.5, "#e2141a"); g.addColorStop(1, "#7c0008");
+  // объём и тень затемняют саму карту, лицевая сторона окрашивает её в красный
+  eachLetter(target, letters, alpha, (l) => {
+    target.shadowColor = "rgba(0,0,0,.55)";
+    target.shadowBlur = 22 * k;
+    target.shadowOffsetY = 6 * k;
+    target.fillStyle = "#3a0004";
+    for (let i = depth; i >= 1; i--) target.fillText(l.ch, -l.cw / 2 + i * 0.7, i);
+  });
+  eachLetter(target, letters, alpha, (l) => {
+    target.fillStyle = g;
+    target.fillText(l.ch, -l.cw / 2, 0);
+  });
+  target.restore();
+}
+
+function whiteWord(ctx, text, { fs, k, alpha, enter, seed, maxW, t }) {
+  ctx.save();
+  ctx.font = WHITE_FONT(fs);
+  const { w0, letters } = letterStates(ctx, text, enter, seed);
+  const fit = Math.min(1, maxW / Math.max(w0, 1));
+  const punch = 1 + 0.1 * (1 - clamp01(enter / 0.16));
+  ctx.scale(fit * punch, fit * punch);
+  const glow = alpha * clamp01(enter / 0.15);
+  // свет: мягкое пятно и тонкие лучи из-за слова, медленно поворачиваются
+  ctx.save();
+  ctx.globalAlpha = glow;
+  const R = w0 * 0.75;
+  const spot = ctx.createRadialGradient(0, 0, 0, 0, 0, R);
+  spot.addColorStop(0, "rgba(255,244,228,.30)"); spot.addColorStop(0.5, "rgba(255,240,220,.12)"); spot.addColorStop(1, "rgba(255,240,220,0)");
+  ctx.fillStyle = spot;
+  ctx.beginPath(); ctx.ellipse(0, 0, R, R * 0.55, 0, 0, Math.PI * 2); ctx.fill();
+  for (let r = 0; r < 10; r++) {
+    const ang = (r / 10) * Math.PI * 2 + t * 0.25 + rnd(seed + r) * 0.4;
+    const len = R * (1.1 + rnd(seed + r + 20) * 0.7), wid = 0.05 + rnd(seed + r + 40) * 0.05;
+    const ray = ctx.createLinearGradient(0, 0, Math.cos(ang) * len, Math.sin(ang) * len);
+    ray.addColorStop(0, "rgba(255,246,232,.16)"); ray.addColorStop(1, "rgba(255,246,232,0)");
+    ctx.fillStyle = ray;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(Math.cos(ang - wid) * len, Math.sin(ang - wid) * len * 0.6);
+    ctx.lineTo(Math.cos(ang + wid) * len, Math.sin(ang + wid) * len * 0.6);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+  // буквы: два прохода свечения и чистая белая сторона
+  eachLetter(ctx, letters, alpha, (l) => {
+    ctx.fillStyle = "#ffffff";
+    ctx.shadowColor = "rgba(255,250,240,.95)";
+    ctx.shadowBlur = 30 * k;
+    ctx.fillText(l.ch, -l.cw / 2, 0);
+    ctx.shadowBlur = 10 * k;
+    ctx.fillText(l.ch, -l.cw / 2, 0);
+  });
   ctx.restore();
 }
 
-function accent(ctx, { p, t, size, k, pi, sc, words, maxW = size * 22 }) {
+function accent(ctx, { p, t, size, k, pi, sc, words, maxW = size * 22, mul }) {
   // текущее слово — последнее начавшееся; оно держится до следующего или до конца строки
   let i = -1;
   words.forEach((w, wi) => { if (t >= w.ws) i = wi; });
@@ -300,18 +354,19 @@ function accent(ctx, { p, t, size, k, pi, sc, words, maxW = size * 22 }) {
   const longest = words.reduce((b, w, wi) => (letters(w) > letters(words[b]) ? wi : b), 0);
   const isRed = (wi) => !!p.chorus || (wi === longest && letters(words[wi]) >= 4);
   const alpha = 1 - Math.pow(sc, 1.4);
-  const cur = words[i];
-  const enter = t - cur.ws;
+  const drawWord = (wi, a, enter) => {
+    const text = words[wi].w.toUpperCase();
+    const opts = { k, alpha: a, enter, seed: pi * 911 + wi * 37, maxW, t };
+    if (isRed(wi)) redWord(ctx, mul, text, { ...opts, fs: size * 3.6 });
+    else whiteWord(ctx, text, { ...opts, fs: size * 2.3 });
+  };
+  const enter = t - words[i].ws;
   // предыдущее слово быстро гаснет под новым
-  if (i > 0 && enter < 0.1) {
-    const prev = words[i - 1], red = isRed(i - 1);
-    accentWord(ctx, prev, { red, fs: size * (red ? 3.6 : 2.6), k, alpha: alpha * (1 - enter / 0.1), enter: 1, seed: pi * 911 + (i - 1) * 37, maxW });
-  }
-  const red = isRed(i);
-  ctx.save();
-  ctx.translate(0, -sc * size * 0.4);
-  accentWord(ctx, cur, { red, fs: size * (red ? 3.6 : 2.6), k, alpha, enter, seed: pi * 911 + i * 37, maxW });
-  ctx.restore();
+  if (i > 0 && enter < 0.1) drawWord(i - 1, alpha * (1 - enter / 0.1), 1);
+  ctx.save(); mul?.save();
+  ctx.translate(0, -sc * size * 0.4); mul?.translate(0, -sc * size * 0.4);
+  drawWord(i, alpha, enter);
+  ctx.restore(); mul?.restore();
 }
 
 // Слова встают на удары трека: начало слова переносится на ближайший удар (до 0.22 с),

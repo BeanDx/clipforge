@@ -302,6 +302,22 @@ fn flash_filter(kills: &[f64], color: &str, h: u32) -> Option<String> {
     ))
 }
 
+// Наезд камеры на строку текста: keys — [начало, конец, x, y] на итоговой шкале, x/y — доли кадра.
+// Плавно (0.5 с) приближаемся на 15% к точке строки, держим, плавно отпускаем.
+fn text_zoom_filter(keys: &[[f64; 4]], w: u32, h: u32) -> Option<String> {
+    if keys.is_empty() { return None; }
+    // плавная ступенька 0..1..0 на отрезке [a, b]: st/ld — регистр выражения ffmpeg
+    let s = |a: f64, b: f64| format!("(st(0,clip(min((t-{a:.3})/0.5,({b:.3}-t)/0.5),0,1))*ld(0)*(3-2*ld(0)))");
+    let env = keys.iter().map(|k| s(k[0], k[1])).collect::<Vec<_>>().join("+");
+    let px = keys.iter().map(|k| format!("{}*{:.4}", s(k[0], k[1]), (k[2] - 0.5) * 0.8)).collect::<Vec<_>>().join("+");
+    let py = keys.iter().map(|k| format!("{}*{:.4}", s(k[0], k[1]), (k[3] - 0.5) * 0.8)).collect::<Vec<_>>().join("+");
+    let z = format!("(1+0.15*min(1,{env}))");
+    Some(format!(
+        "scale=w='trunc(iw*{z}/2)*2':h='trunc(ih*{z}/2)*2':eval=frame,\
+         crop=w={w}:h={h}:x='clip((0.5+{px})*iw-ow/2,0,iw-ow)':y='clip((0.5+{py})*ih-oh/2,0,ih-oh)'"
+    ))
+}
+
 // Зум на хедшот: кадр за 0.12 с наезжает к центру (там прицел, а значит и голова цели),
 // держится до +0.25 с и плавно отпускает к +0.6 с. kills — секунды хедшотов на итоговой шкале.
 fn hs_zoom_filter(kills: &[f64], w: u32, h: u32) -> Option<String> {
@@ -901,21 +917,36 @@ fn finish_take(j: &Job, ff: &Path, d: &Path, clip: &Clip, dst: &Path, hud_dir: O
     let has_audio = a.exists();
     let hud = hud_dir.map(|h| h.join("hud.ffconcat")).filter(|p| p.exists());
     let lyr = lyr_dir.map(|h| h.join("lyrics.ffconcat")).filter(|p| p.exists());
+    // слой умножения текста (буквы окрашивают саму карту) и куда камера тянется к строкам
+    let lyr_mul = lyr_dir.map(|h| h.join("lyrics_mul.ffconcat")).filter(|p| p.exists() && lyr.is_some());
+    let text_zoom: Vec<[f64; 4]> = lyr_dir.and_then(|h| fs::read_to_string(h.join("zoom.json")).ok())
+        .and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     let music = j.music.as_ref().filter(|m| Path::new(&m.path).exists());
     // номера входов ffmpeg: 0 — видео, дальше по порядку, что есть
     let mut next = 1 + has_audio as usize;
     let mut take = |on: bool| on.then(|| { next += 1; next - 1 });
     let hud_idx = take(hud.is_some());
     let lyr_idx = take(lyr.is_some());
+    let mul_idx = take(lyr_mul.is_some());
     let mus_idx = take(music.is_some());
 
     // Граф передаём строкой: -filter_complex_script убрали в ffmpeg 8, а длина графа далека от лимита командной строки
     let mut filter = post_filter(j, clip, has_audio, has_rubberband(ff), hud_idx);
     let (mut vout, mut aout) = ("[v]", has_audio.then_some("[a]"));
     // Текст песни и трек — уже на итоговой шкале времени (после slow-mo): музыка не замедляется
+    if let Some(m) = mul_idx {
+        // умножение в RGB: белое — без изменений, красное окрашивает картинку, тёмное затемняет
+        filter += &format!(";{vout}format=gbrp[vg];[{m}:v]format=gbrp[mg];[vg][mg]blend=all_mode=multiply,format=yuv420p[vm]");
+        vout = "[vm]";
+    }
     if let Some(i) = lyr_idx {
-        filter += &format!(";[v][{i}:v]overlay=0:0:format=auto[vl]");
+        filter += &format!(";{vout}[{i}:v]overlay=0:0:format=auto[vl]");
         vout = "[vl]";
+    }
+    // в паузах камера плавно наезжает на строку текста (вместе с самим текстом)
+    if let Some(zf) = text_zoom_filter(&text_zoom, j.width, j.height) {
+        filter += &format!(";{vout}{zf}[vtz]");
+        vout = "[vtz]";
     }
     if j.kill_flash {
         let segs = clip_segs(j, clip);
@@ -980,6 +1011,7 @@ fn finish_take(j: &Job, ff: &Path, d: &Path, clip: &Clip, dst: &Path, hud_dir: O
         if has_audio { cmd.arg("-i").arg(&a); }
         if let Some(h) = &hud { cmd.args(["-f", "concat", "-safe", "0", "-i"]).arg(h); }
         if let Some(l) = &lyr { cmd.args(["-f", "concat", "-safe", "0", "-i"]).arg(l); }
+        if let Some(l) = &lyr_mul { cmd.args(["-f", "concat", "-safe", "0", "-i"]).arg(l); }
         if let Some(m) = music {
             let offset = clip.music_start.unwrap_or(m.offset).max(0.0);
             cmd.args(["-ss", &format!("{offset:.3}"), "-i"]).arg(&m.path);

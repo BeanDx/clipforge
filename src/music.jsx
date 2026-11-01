@@ -12,7 +12,7 @@ export const MUSIC_DEFAULT = {
   enabled: false, path: "", title: "", artist: "", duration: 0,
   lrc: "", start: 0, musicVol: 0.8, gameVol: 0.35, showLyrics: true, chorusSlow: false, chorusOnKill: true,
   beatFx: false, beatMode: "zoom", beatAmount: 1,
-  lyricStyle: "karaoke",
+  lyricStyle: "karaoke", smartLyrics: true,
 };
 const BEAT_MODES = [["zoom", "Зум"], ["shake", "Тряска"], ["both", "Зум + тряска"]];
 
@@ -201,37 +201,46 @@ function layoutParts(lines) {
 
 // Кусок строки, «висящий» в мире: позиция на экране зависит от того, куда смотрит камера.
 // Сами слова рисует выбранный стиль (src/lyricStyles.js) в системе координат строки.
-function drawPart(ctx, p, t, cam, proj, k, pi, style) {
+// mul — слой умножения (белый фон), для стилей, чьи буквы окрашивают саму карту.
+// Возвращает, где строка на экране (доли кадра) — туда тянется камера в паузах.
+function drawPart(ctx, p, t, cam, proj, k, pi, style, mul) {
+  const st = lyricStyle(style);
+  const centered = st.screen || p.center;
   // yaw растёт влево: точка левее взгляда имеет rel > 0 и на экране левее центра
   const rel = wrap(p.yaw - cam.yaw);
-  if (Math.abs(rel) > 75 && !lyricStyle(style).screen) return;
-  const x = proj.cx - proj.f * Math.tan((rel * Math.PI) / 180);
-  const y = proj.cy - proj.f * Math.tan(((cam.pitch - p.pitch) * Math.PI) / 180);
+  if (Math.abs(rel) > 75 && !centered) return null;
+  const x = centered ? proj.cx : proj.cx - proj.f * Math.tan((rel * Math.PI) / 180);
+  const y = centered ? proj.cy * 0.92 : proj.cy - proj.f * Math.tan(((cam.pitch - p.pitch) * Math.PI) / 180);
   // исчезновение: последние 0.6 с строки
   const sc = Math.max(0, Math.min(1, (t - (p.end - 0.6)) / 0.6));
-  const st = lyricStyle(style);
   // слова на ударах трека (стили со snap)
   const words = st.snap ? snapWords(wordsOf(p), p.beats) : wordsOf(p);
-  ctx.save();
-  if (st.screen) {
-    // стиль поверх экрана: по центру кадра, камера не влияет
-    ctx.setTransform(1, 0, 0, 1, proj.cx, proj.cy * 0.92);
-  } else {
-    // плоскость текста развёрнута к камере, но при уходе к краю слегка «поворачивается» — объём
-    const squash = 1 - Math.min(Math.abs(rel), 60) / 260;
-    ctx.setTransform(squash, Math.sin((rel * Math.PI) / 180) * 0.12, 0, 1, x, y);
-  }
-  drawLyricStyle(ctx, style, { p, t, size: 40 * k, k, pi, sc, words, maxW: proj.cx * 1.7 });
-  ctx.restore();
+  // строка в центре экрана (долгая пауза) — крупнее и без поворота к камере
+  const m = centered
+    ? [1, 0, 0, 1, x, y]
+    : [1 - Math.min(Math.abs(rel), 60) / 260, Math.sin((rel * Math.PI) / 180) * 0.12, 0, 1, x, y];
+  const size = 40 * k * (p.center && !st.screen ? 1.45 : 1);
+  ctx.save(); mul?.save();
+  ctx.setTransform(...m); mul?.setTransform(...m);
+  drawLyricStyle(ctx, style, { p, t, size, k, pi, sc, words, maxW: proj.cx * 1.7, mul });
+  ctx.restore(); mul?.restore();
+  return { x: x / (proj.cx * 2), y: y / (proj.cy * 2) };
 }
 
 const pngOf = (canvas) => new Promise((ok, fail) =>
   canvas.toBlob((b) => (b ? b.arrayBuffer().then((a) => ok(new Uint8Array(a)), fail) : fail(new Error("canvas.toBlob"))), "image/png"));
 
+// Умная подача: секунды киллов на итоговой шкале клипа (после slow-mo)
+const KILL_BEFORE = 0.9, KILL_AFTER = 0.7, QUIET_CENTER = 4;
+
 // Кадры текста песни для одного клипа. Текст «закреплён» в мире: строка появляется левее/правее
 // взгляда и остаётся на месте, когда камера поворачивается (углы — из демки, cam: [[tick, pitch, yaw]]).
 // Время — итоговое (после slow-mo): музыка не замедляется, а камера берётся из записи через outToIn.
-export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo, drops = [], fov, fps, W, H, save, onFrame, style = "karaoke", beats = [] }) {
+// smart — умная подача: строки, на которые приходится килл, пропускаются (кроме припева), в паузах
+// камера тянется к строке (zoom.json для ffmpeg), в долгих паузах строка встаёт по центру.
+// Для стилей с multiply рядом пишется второй слой кадров (m*.png, lyrics_mul.ffconcat).
+export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo, drops = [], fov, fps, W, H, save, onFrame, style = "karaoke", beats = [], smart = true }) {
+  const st = lyricStyle(style);
   const cam = smoothCam(rawCam);
   const lines = parseLrc(lrc);
   const parts = layoutParts(lines);
@@ -240,13 +249,35 @@ export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo,
   for (const l of lines) if (l.text) counts.set(norm(l.text), (counts.get(norm(l.text)) || 0) + 1);
   for (const pt of parts) { pt.chorus = (counts.get(norm(lines[pt.li].text)) || 0) >= 2; pt.beats = beats; }
   const base = (clip.end - clip.start) / TICKRATE;
-  const kills = slowmo ? (clip.killTicks || []).map((t) => (t - clip.start) / TICKRATE) : [];
+  const killRec = (clip.killTicks || []).map((t) => (t - clip.start) / TICKRATE);
+  const kills = slowmo ? killRec : [];
   const segs = slowmo || drops.length ? slowmoSegments(kills, drops) : [[0, Infinity, 1]];
   // + повторы глазами жертв в конце клипа (как replays в render.rs)
   const reps = clip.cine?.victims?.length ? clip.cine.victims.map((v) => v.kill)
     : clip.cine?.victimSlot != null ? [clip.cine.kill] : [];
   const replay = reps.reduce((s, k) => s + (k + 16 - Math.max(k - 77, clip.start)) / TICKRATE, 0);
-  const dur = segs.reduce((s, [a, b, sp]) => s + (Math.min(b, base) - Math.min(a, base)) / sp, 0) + replay;
+  const mainDur = segs.reduce((s, [a, b, sp]) => s + (Math.min(b, base) - Math.min(a, base)) / sp, 0);
+  const dur = mainDur + replay;
+
+  if (smart) {
+    // моменты действия: киллы и повторы в конце — на них текст не нужен, кроме припева
+    const action = killRec.map((t) => [inToOut(segs, t) - KILL_BEFORE, inToOut(segs, t) + KILL_AFTER]);
+    if (replay > 0) action.push([mainDur - 0.2, dur]);
+    const busy = (a, b) => action.some(([x, y]) => a < y && b > x);
+    // сколько тихого времени вокруг строки
+    const quiet = (a, b) => {
+      const before = Math.max(0, ...action.filter(([, y]) => y <= a).map(([, y]) => y));
+      const after = Math.min(dur, ...action.filter(([x]) => x >= b).map(([x]) => x));
+      return after - before;
+    };
+    for (const pt of parts) {
+      const a = pt.t0 - start, b = pt.end - start;
+      pt.hide = !pt.chorus && busy(a, b);
+      pt.quiet = !busy(a, b);
+      pt.center = pt.quiet && !st.screen && quiet(a, b) >= QUIET_CENTER;
+    }
+  }
+
   // горизонтальный угол обзора: fov в CS задан для 4:3, для широких кадров он больше
   const hf = 2 * Math.atan(Math.tan(((fov || 90) * Math.PI) / 360) * (W / H) / (4 / 3));
   const proj = { cx: W / 2, cy: H / 2, f: W / 2 / Math.tan(hf / 2) };
@@ -257,11 +288,18 @@ export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo,
   const canvas = document.createElement("canvas");
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext("2d");
-  await document.fonts.load(lyricFont(style, 40), "Aa Яя").catch(() => {});
+  let mcanvas = null, mctx = null;
+  if (st.multiply) {
+    mcanvas = document.createElement("canvas");
+    mcanvas.width = W; mcanvas.height = H;
+    mctx = mcanvas.getContext("2d");
+  }
+  await Promise.all([lyricFont(style, 40), ...(st.extraFonts || [])].map((f) => document.fonts.load(f, "Aa Яя").catch(() => {})));
 
-  let list = "ffconcat version 1.0\n";
-  let blank = null, n = 0;
+  let list = "ffconcat version 1.0\n", mlist = "ffconcat version 1.0\n";
+  let blank = null, mblank = null, n = 0;
   const anchors = {}; // взгляд камеры в начале каждой строки
+  const zoom = new Map(); // строка -> куда тянется камера: [начало, конец, x, y] на итоговой шкале
   const frames = Math.ceil(dur * rate);
   for (let fi = 0; fi <= frames; fi++) {
     const tOut = fi / rate;
@@ -275,24 +313,41 @@ export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo,
       p.yaw = anchors[p.li].yaw + p.side * 24;
       p.pitch = anchors[p.li].pitch;
     }
-    let live = parts.filter((p) => tTrack >= p.t0 && tTrack < p.end);
-    // экранный стиль показывает одно слово: только самую свежую строку
-    if (lyricStyle(style).screen && live.length > 1) live = [live.reduce((a, b) => (b.t0 > a.t0 ? b : a))];
-    let name;
+    let live = parts.filter((p) => !p.hide && tTrack >= p.t0 && tTrack < p.end);
+    // экранный стиль или строка по центру показывает одно: только самую свежую строку
+    if ((st.screen || live.some((p) => p.center)) && live.length > 1) live = [live.reduce((a, b) => (b.t0 > a.t0 ? b : a))];
+    let name, mname;
     if (!live.length) {
       if (!blank) { ctx.clearRect(0, 0, W, H); blank = "blank.png"; await save(blank, await pngOf(canvas)); }
-      name = blank;
+      if (mctx && !mblank) { mctx.setTransform(1, 0, 0, 1, 0, 0); mctx.fillStyle = "#fff"; mctx.fillRect(0, 0, W, H); mblank = "mblank.png"; await save(mblank, await pngOf(mcanvas)); }
+      name = blank; mname = mblank;
     } else {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, W, H);
-      live.forEach((p) => drawPart(ctx, p, tTrack, view, proj, k, parts.indexOf(p), style));
-      name = `f${String(n++).padStart(5, "0")}.png`;
+      if (mctx) { mctx.setTransform(1, 0, 0, 1, 0, 0); mctx.fillStyle = "#fff"; mctx.fillRect(0, 0, W, H); }
+      live.forEach((p) => {
+        const at = drawPart(ctx, p, tTrack, view, proj, k, parts.indexOf(p), style, mctx);
+        // камера тянется к строке в паузах (первое место, где строка появилась)
+        if (smart && at && p.quiet && !zoom.has(p.li)) zoom.set(p.li, [p.t0 - start, p.end - start, at.x, at.y]);
+      });
+      name = `f${String(n).padStart(5, "0")}.png`;
       await save(name, await pngOf(canvas));
+      if (mctx) { mname = `m${String(n).padStart(5, "0")}.png`; await save(mname, await pngOf(mcanvas)); }
+      n++;
     }
     list += `file '${name}'\nduration ${(1 / rate).toFixed(5)}\n`;
+    if (mctx) mlist += `file '${mname}'\nduration ${(1 / rate).toFixed(5)}\n`;
     if (fi % 30 === 0) onFrame?.(fi, frames);
   }
-  return list + `file '${blank || `f${String(n - 1).padStart(5, "0")}.png`}'\n`;
+  const lastF = `f${String(n - 1).padStart(5, "0")}.png`, lastM = `m${String(n - 1).padStart(5, "0")}.png`;
+  if (mctx) await save("lyrics_mul.ffconcat", new TextEncoder().encode(mlist + `file '${mblank || lastM}'\n`));
+  if (smart && zoom.size) {
+    // отрезки не пересекаются: следующая строка начинается не раньше конца предыдущей
+    const keys = [...zoom.values()].sort((a, b) => a[0] - b[0]);
+    for (let i = 1; i < keys.length; i++) keys[i][0] = Math.max(keys[i][0], keys[i - 1][1]);
+    await save("zoom.json", new TextEncoder().encode(JSON.stringify(keys.filter(([a, b]) => b - a > 0.6))));
+  }
+  return list + `file '${blank || lastF}'\n`;
 }
 // --- прослушивание выбранного куска ---
 const MIME = { mp3: "audio/mpeg", m4a: "audio/mp4", mp4: "audio/mp4", aac: "audio/aac", wav: "audio/wav", ogg: "audio/ogg", flac: "audio/flac" };
@@ -741,7 +796,12 @@ export function MusicPanel({ music, setMusic, hlae, clipLen, Toggle, Hint }) {
               <Toggle label={tr("Текст песни на экране")} hint={tr("Текст висит прямо на карте, стиль выбирается ниже")}
                 checked={music.showLyrics} disabled={!lines.length} onChange={(v) => set({ showLyrics: v })} />
               <div className={`mu-sub ${music.showLyrics && lines.length ? "is-open" : ""}`}>
-                <LyricStylePicker value={music.lyricStyle || "karaoke"} onChange={(id) => set({ lyricStyle: id })} Hint={Hint} />
+                <div>
+                  <LyricStylePicker value={music.lyricStyle || "karaoke"} onChange={(id) => set({ lyricStyle: id })} Hint={Hint} />
+                  <Toggle label={tr("Умная подача текста")} hint={tr("Текст в паузах, камера тянется к строке")}
+                    help={tr("Строки, на которые приходится килл, не показываются, чтобы текст не закрывал фраг. Припев показывается всегда. Когда ничего не происходит, камера плавно наезжает на строку, а в долгих паузах строка встает крупно в центр экрана.")}
+                    checked={music.smartLyrics !== false} onChange={(v) => set({ smartLyrics: v })} />
+                </div>
               </div>
               <Toggle label={tr("Замедление на припеве")} hint={tr("Плавный slow-mo в момент, когда начинается припев")}
                 help={tr("Программа находит в тексте припев (строки, которые повторяются) и в момент его начала очень плавно замедляет видео примерно в 3 раза, держит и так же плавно разгоняет обратно. Трек при этом не замедляется. Если припев в клип не попал - ничего не меняется.")}
