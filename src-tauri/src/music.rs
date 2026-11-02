@@ -107,36 +107,63 @@ pub async fn track_info(hlae: String, path: String) -> Result<TrackInfo, String>
         }
     }
     if info.title.is_empty() {
-        info.title = Path::new(&path).file_stem().map(|s| s.to_string_lossy().replace('_', " ")).unwrap_or_default();
+        info.title = clean_tag(&Path::new(&path).file_stem().map(|s| s.to_string_lossy().replace('_', " ")).unwrap_or_default());
+    }
+    // без тега исполнителя название часто «Исполнитель - Песня» (имя файла или весь тег title):
+    // делим, иначе поиск текста ищет песню с таким длинным названием и ничего не находит
+    if info.artist.is_empty() {
+        for sep in [" - ", " – ", " — "] {
+            if let Some((a, t)) = info.title.clone().split_once(sep) {
+                if !a.trim().is_empty() && !t.trim().is_empty() {
+                    info.artist = a.trim().to_string();
+                    info.title = t.trim().to_string();
+                }
+                break;
+            }
+        }
     }
     Ok(info)
 }
 
-// Убирает приписки сайтов-источников: «ДИНАСТИЯ (Muzjoy.net)» -> «ДИНАСТИЯ»
+// Убирает приписки сайтов-источников: «ДИНАСТИЯ (Muzjoy.net)» -> «ДИНАСТИЯ», «911 [zaycev.net]» -> «911»
 fn clean_tag(v: &str) -> String {
     let mut s = v.to_string();
-    if let Some(i) = s.rfind('(') {
-        if s[i..].contains('.') { s.truncate(i); }
+    loop {
+        let t = s.trim_end();
+        let open = match t.chars().last() { Some(')') => '(', Some(']') => '[', _ => break };
+        let Some(i) = t.rfind(open) else { break };
+        if !t[i..].contains('.') { break; }
+        s = t[..i].to_string();
     }
     s.trim().to_string()
 }
 
-// Поиск текста в LRCLIB. Сервер иногда отвечает 503 «busy» — пробуем несколько раз.
-// Возвращаем сырой JSON-массив кандидатов, выбор лучшего — на фронтенде (по длительности).
+// Поиск текста в LRCLIB. Сервер часто отвечает «busy» (503 или JSON ServerOverload) — повторяем
+// с нарастающей паузой. Возвращаем сырой JSON-массив кандидатов, выбор лучшего — на фронтенде
+// (по длительности). q — общий поиск по строке (когда точный по исполнителю и названию не нашёл).
 #[tauri::command]
-pub async fn lyrics_search(artist: String, title: String) -> Result<String, String> {
+pub async fn lyrics_search(artist: String, title: String, q: Option<String>) -> Result<String, String> {
     let enc = |s: &str| s.bytes().map(|b| match b {
         b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
         _ => format!("%{b:02X}"),
     }).collect::<String>();
-    let url = format!("https://lrclib.net/api/search?track_name={}&artist_name={}", enc(&title), enc(&artist));
+    let url = match q.filter(|q| !q.trim().is_empty()) {
+        Some(q) => format!("https://lrclib.net/api/search?q={}", enc(&q)),
+        None if artist.trim().is_empty() => format!("https://lrclib.net/api/search?track_name={}", enc(&title)),
+        None => format!("https://lrclib.net/api/search?track_name={}&artist_name={}", enc(&title), enc(&artist)),
+    };
     let mut last = String::new();
-    for attempt in 0..5 {
-        if attempt > 0 { thread::sleep(Duration::from_millis(1200 * attempt)); }
+    for attempt in 0..7u64 {
+        if attempt > 0 { thread::sleep(Duration::from_millis(800 * attempt)); }
         match ureq::get(&url).header("User-Agent", "clipforge (CS2 highlight renderer)").call() {
-            Ok(mut r) => return r.body_mut().read_to_string().map_err(|e| e.to_string()),
+            Ok(mut r) => {
+                let body = r.body_mut().read_to_string().map_err(|e| e.to_string())?;
+                if body.trim_start().starts_with('[') { return Ok(body); }
+                last = if body.contains("ServerOverload") { "сервер перегружен".into() } else { body.chars().take(120).collect() };
+            }
             Err(e) => last = e.to_string(),
         }
     }
-    Err(format!("LRCLIB недоступен: {last}"))
+    Err(format!("LRCLIB сейчас не отвечает ({last}). Попробуй «Найти текст» через минуту."))
 }
+

@@ -1343,3 +1343,61 @@
 .ff-bar.is-err { background: rgba(229,72,77,.08); color: var(--red); }
 .ff-bar__track { flex: 1; max-width: 360px; height: 4px; background: var(--line); overflow: hidden; }
 .ff-bar__track i { display: block; height: 100%; background: var(--teal); box-shadow: 0 0 8px var(--teal); transition: width .3s; }
+
+/* архив: добавить пачку демок, прогресс и итог */
+.arc-add { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.arc-import { display: flex; align-items: center; gap: 14px; }
+.arc-msg { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--line); background: rgba(255,255,255,.02); }
+.arc-msg .err { font-size: .85rem; }
+
+/* распознавание текста из трека (Whisper): прогресс загрузки и работы */
+.mu-asr { display: flex; align-items: center; gap: 14px; }
+
+/* редактор текста: строка, которая сейчас звучит, и слова, которые уже спеты */
+.mu-rows { position: relative; }
+.mu-words { font-style: normal; }
+.mu-words i { font-style: normal; transition: color .12s, text-shadow .12s; }
+.mu-rows li.is-live { opacity: 1; border-left-color: var(--teal); background: rgba(46,230,192,.07); }
+.mu-rows li.is-live .mu-words { color: var(--dim); }
+.mu-rows li.is-live .mu-words i.is-sung { color: #fff; text-shadow: 0 0 10px rgba(46,230,192,.55); }
+
+/* «Эдит»: чей эдит, если в демках несколько общих игроков */
+.ne-player { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ne-track .mu-range { width: 100%; margin-top: 6px; }
+.ne-track .err { font-size: .8rem; }
+
+/* «Эдит»: прослушивание трека */
+.ne-player-row { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.ne-seek { position: relative; flex: 1; display: flex; align-items: center; }
+.ne-seek .mu-range { width: 100%; margin: 0; }
+.ne-seek__head { position: absolute; top: 50%; width: 2px; height: 18px; margin-top: -9px; background: var(--ne, #c45cff); box-shadow: 0 0 8px var(--ne, #c45cff); pointer-events: none; }
+.ne-sung { font-family: "Fredoka", var(--ui); font-weight: 700; color: #f3d6ff; text-shadow: 0 0 10px rgba(214,59,255,.6); }
+
+/* «Эдит»: ход сборки */
+.ne-prog { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border: 1px solid rgba(196,92,255,.35); background: linear-gradient(160deg, rgba(196,92,255,.08), rgba(111,91,255,.03)); }
+.ne-prog__top { display: flex; align-items: center; gap: 18px; }
+.ne-prog__pct { font-size: 2.6rem; line-height: 1; color: #f3d6ff; text-shadow: 0 0 18px rgba(214,59,255,.5); }
+.ne-prog__pct small { font-size: 1.1rem; margin-left: 2px; opacity: .8; }
+.ne-prog__info { display: flex; flex-direction: column; gap: 3px; }
+.ne-prog__left { font-size: 1.15rem; font-weight: 700; }
+.ne-prog__bar { height: 6px; background: var(--line); overflow: hidden; }
+.ne-prog__bar i { display: block; height: 100%; background: linear-gradient(90deg, #6f5bff, #d63bff); box-shadow: 0 0 12px #d63bff; transition: width .6s ease; }
+.ne-prog__stage { font-size: .9rem; }
+.ne-prog__steps { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.ne-prog__steps li { display: flex; align-items: center; gap: 7px; font-size: .85rem; color: var(--dim); }
+.ne-prog__steps li i { width: 9px; height: 9px; border: 1px solid var(--line-hi); }
+.ne-prog__steps li.is-done { color: var(--text); }
+.ne-prog__steps li.is-done i { background: #c45cff; border-color: #c45cff; }
+.ne-prog__steps li.is-now { color: #f3d6ff; }
+.ne-prog__steps li.is-now i { border-color: #d63bff; animation: dot-pulse 1.2s ease-in-out infinite; box-shadow: 0 0 8px #d63bff; }
+.ne-player__who { font-size: 1.05rem; margin-right: 6px; }
+.ne-player__who b { color: #f3d6ff; padding: 2px 8px; margin-left: 4px; border: 1px solid #c45cff; background: rgba(196,92,255,.14); box-shadow: 0 0 12px rgba(214,59,255,.3); }
+
+/* «Эдит»: стиль текста и где ночь */
+.ne-opts { display: flex; gap: 22px; flex-wrap: wrap; }
+.ne-opt { display: flex; flex-direction: column; gap: 6px; }
+.ne-opt .ratios button.is-on { border-color: #c45cff; color: #f3d6ff; background: rgba(196,92,255,.12); }
+
+/* «Эдит»: только хедшоты и сколько моментов */
+.ne-pickbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ne-pickbar .ratios button.is-on { border-color: #c45cff; color: #f3d6ff; background: rgba(196,92,255,.12); }

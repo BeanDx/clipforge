@@ -1,12 +1,16 @@
 // Свой трек под хайлайтом + текст песни на экране. По умолчанию выключено.
-// Текст — синхронизированный по строкам из LRCLIB (поиск в Rust: music.rs), внутри строки
-// буквы появляются в такт, распределяясь по времени её звучания.
+// Текст — синхронизированный по строкам из LRCLIB (поиск в Rust: music.rs). Если песни там нет —
+// вставленный текст: строки размечаются пробелом под трек или автоматически (маленькая нейросеть
+// Whisper даёт время слов, src/lyricsAlign.js сопоставляет их с текстом). Внутри строки буквы
+// появляются в такт, распределяясь по времени её звучания.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import { tr, trError, useLang } from "./i18n";
 import { drawDust, drawTargets } from "./nightfx";
+import { alignLyrics } from "./lyricsAlign";
 import { LYRIC_STYLES, drawLyricStyle, lyricFont, lyricStyle, snapWords, wordsOf, heartWord } from "./lyricStyles";
 import previewBg from "./assets/previews/lyrics-bg.webp";
 export const MUSIC_DEFAULT = {
@@ -232,12 +236,13 @@ function layoutParts(lines) {
       let cut = l.text.lastIndexOf(" ", Math.round(mid));
       if (cut < 6) cut = l.text.indexOf(" ", Math.round(mid));
       if (cut > 0) {
-        parts.push({ li, text: l.text.slice(0, cut), t0: l.t, t1: l.t + type / 2, end: l.t + span, side: 1 });
-        parts.push({ li, text: l.text.slice(cut + 1), t0: l.t + type / 2, t1: l.t + type, end: l.t + span, side: -1 });
+        // wOff — с какого слова строки начинается кусок (для времени слов по звуку)
+        parts.push({ li, text: l.text.slice(0, cut), t0: l.t, t1: l.t + type / 2, end: l.t + span, side: 1, wOff: 0 });
+        parts.push({ li, text: l.text.slice(cut + 1), t0: l.t + type / 2, t1: l.t + type, end: l.t + span, side: -1, wOff: l.text.slice(0, cut).split(/\s+/).filter(Boolean).length });
         return;
       }
     }
-    parts.push({ li, text: l.text, t0: l.t, t1: l.t + type, end: l.t + span, side: li % 2 ? -1 : 1 });
+    parts.push({ li, text: l.text, t0: l.t, t1: l.t + type, end: l.t + span, side: li % 2 ? -1 : 1, wOff: 0 });
   });
   return parts;
 }
@@ -262,7 +267,20 @@ function drawPart(ctx, p, t, cam, proj, k, pi, style, mul) {
   // исчезновение: последние 0.6 с строки
   const sc = Math.max(0, Math.min(1, (t - (p.end - 0.6)) / 0.6));
   // слова на ударах трека (стили со snap)
-  const words = st.snap ? snapWords(wordsOf(p), p.beats) : wordsOf(p);
+  // время каждого слова, если известно (авто-тайминг по звуку): слово появляется, когда его поют
+  let base = wordsOf(p);
+  if (p.wt) {
+    let last = -Infinity;
+    const ts = base.map((w, i) => { const t = p.wt[p.wOff + i]; const v = Number.isFinite(t) ? Math.max(t, last) : null; if (v != null) last = v; return v; });
+    if (ts.filter((t) => t != null).length >= base.length / 2) {
+      base = base.map((w, i) => {
+        const ws = ts[i] ?? w.ws;
+        const nx = ts.slice(i + 1).find((t) => t != null);
+        return { ...w, ws, we: Math.min(nx ?? p.end, ws + 1.5) };
+      });
+    }
+  }
+  const words = st.snap ? snapWords(base, p.beats) : base;
   const m = centered
     ? [1, 0, 0, 1, x, y]
     : [1 - Math.min(Math.abs(rel), 60) / 260, Math.sin((rel * Math.PI) / 180) * 0.12, 0, 1, x, y];
@@ -289,7 +307,7 @@ const ZOOM_QUIET = 2.5, ZOOM_GAP = 5;
 // камера иногда коротко тянется вбок к строке (zoom.json для ffmpeg).
 // Для стилей с multiply рядом пишется второй слой кадров (m*.png, lyrics_mul.ffconcat).
 // night — эффекты пресета Night на тех же кадрах: { dust, eye, targets } (пыль и рамка на цели, src/nightfx.js)
-export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo, drops = [], fov, fps, W, H, save, onFrame, style = "karaoke", beats = [], smart = true, night = null }) {
+export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo, drops = [], fov, fps, W, H, save, onFrame, style = "karaoke", beats = [], smart = true, night = null, wordTimes = null }) {
   const st = lyricStyle(style);
   const cam = smoothCam(rawCam);
   const lines = parseLrc(lrc);
@@ -297,7 +315,7 @@ export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo,
   // припев (строки, которые повторяются) — для акцентов в стиле «Акцент»; удары — в секундах трека
   const counts = new Map();
   for (const l of lines) if (l.text) counts.set(norm(l.text), (counts.get(norm(l.text)) || 0) + 1);
-  for (const pt of parts) { pt.chorus = (counts.get(norm(lines[pt.li].text)) || 0) >= 2; pt.beats = beats; }
+  for (const pt of parts) { pt.chorus = (counts.get(norm(lines[pt.li].text)) || 0) >= 2; pt.beats = beats; pt.wt = wordTimes?.get(pt.li) || null; }
   // сердце (стиль Night): вокруг «любовного» слова, иначе вокруг последнего слова первой строки припева;
   // не чаще раза в 8 секунд, чтобы не приедалось
   if (style === "night") {
@@ -473,7 +491,7 @@ function usePreview(path, start, len, volume) {
 }
 
 // Свободный плеер трека для разметки текста: играет с любого места, позиция — по кадрам
-function useTrackPlayer(path) {
+export function useTrackPlayer(path) {
   const audio = useRef(null);
   const href = useRef("");
   const raf = useRef(0);
@@ -545,12 +563,43 @@ export function cleanLyrics(text) {
 
 // Свой текст песни: LRC с метками применяется сразу, обычный текст размечается под трек —
 // включаешь трек и жмёшь Пробел в начале каждой строки
-function LyricsEditor({ path, initial, onDone, onCancel }) {
+function LyricsEditor({ path, hlae, initial, onDone, onCancel }) {
   const [text, setText] = useState(initial);
   const [rows, setRows] = useState(null);
   const [cur, setCur] = useState(0);
   const player = useTrackPlayer(path);
   const listRef = useRef(null);
+  // авто-тайминг: [этап, скачано МБ, всего МБ] пока идёт; ошибка
+  const [auto, setAuto] = useState(null);
+  const [autoErr, setAutoErr] = useState("");
+  const autoTime = async (base) => {
+    const list = base || rows;
+    if (!list?.length) return;
+    setAutoErr(""); setAuto(["run", 0, 0]);
+    const un = await listen("whisper-progress", (e) => setAuto(e.payload));
+    try {
+      // язык по тексту: кириллица — русский, иначе пусть Whisper определит сам
+      const lang = /[а-яё]/i.test(list.map((r) => r.text).join(" ")) ? "ru" : "auto";
+      const words = await invoke("track_words", { hlae, path, lang });
+      const timed = alignLyrics(list.map((r) => r.text), words.map(([t, w]) => ({ t, w })));
+      setRows(timed.map((r) => ({ text: r.text, t: Math.max(0, r.t - 0.1) })));
+      setCur(timed.length);
+    } catch (e) { setAutoErr(String(e)); }
+    finally { un(); setAuto(null); }
+  };
+  const autoBar = (auto || autoErr) && (
+    <div className="mu-asr">
+      {auto ? (
+        <>
+          <span className="mono accent pulse">
+            {auto[0] === "run" ? tr("слушаю трек и расставляю строки... обычно до полминуты")
+              : tr(auto[0] === "model" ? "скачиваю модель для таймингов (один раз): {0} / {1} МБ" : "скачиваю Whisper (один раз): {0} / {1} МБ", Math.round(auto[1]), Math.round(auto[2]) || "?")}
+          </span>
+          {auto[0] !== "run" && <span className="ff-bar__track"><i style={{ width: auto[2] ? `${(auto[1] / auto[2]) * 100}%` : "20%" }} /></span>}
+        </>
+      ) : <span className="mono err">{trError(autoErr)}</span>}
+    </div>
+  );
 
   const apply = () => {
     if (parseLrc(text).some((l) => l.text)) return onDone(text.trim());
@@ -572,7 +621,7 @@ function LyricsEditor({ path, initial, onDone, onCancel }) {
     setCur(i);
     const prev = rows.slice(0, i).reverse().find((r) => r.t != null);
     const at = rows[i].t ?? prev?.t;
-    if (at != null) player.playing ? player.seek(at - 2) : player.play(at - 2);
+    if (at != null) player.playing ? player.seek(at - 0.5) : player.play(at - 0.5);
   };
 
   // Пробел — строка, Backspace — отменить последнюю. Ловим раньше кнопок, чтобы пробел их не нажимал.
@@ -588,6 +637,31 @@ function LyricsEditor({ path, initial, onDone, onCancel }) {
   useEffect(() => {
     listRef.current?.querySelector(".is-cur")?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [cur]);
+  // пока трек играет — строка, которая сейчас звучит (последняя с временем не позже позиции)
+  let live = -1;
+  if (rows && player.playing) rows.forEach((r, i) => { if (r.t != null && r.t <= player.pos) live = i; });
+  useEffect(() => {
+    if (live < 0) return;
+    const el = listRef.current?.children[live];
+    const box = listRef.current;
+    // только сам список, без прокрутки всей страницы
+    if (el && box) box.scrollTo({ top: el.offsetTop - box.clientHeight / 2 + el.clientHeight / 2, behavior: "smooth" });
+  }, [live]);
+  // слова строки загораются по очереди: время строки до следующей делится между словами по длине
+  const sungWords = (i) => {
+    const r = rows[i];
+    const next = rows.slice(i + 1).find((x) => x.t != null)?.t ?? r.t + 4;
+    const span = Math.min(next - r.t, 6);
+    const ws = r.text.split(/(\s+)/);
+    const total = r.text.replace(/\s+/g, "").length || 1;
+    let acc = 0;
+    return ws.map((w, k) => {
+      if (/^\s+$/.test(w)) return w;
+      const at = r.t + (span * acc) / total;
+      acc += w.length;
+      return <i key={k} className={player.pos >= at ? "is-sung" : ""}>{w}</i>;
+    });
+  };
 
   if (!rows) {
     return (
@@ -599,6 +673,13 @@ function LyricsEditor({ path, initial, onDone, onCancel }) {
           <span className="mono dim">{parseLrc(text).some((l) => l.text) ? tr("LRC: метки времени найдены") : tr("обычный текст: {0} строк, заголовки и мусор с сайта убраны", cleanLyrics(text).length)}</span>
           <span className="chips__spacer" />
           <button type="button" className="chip" onClick={onCancel}>{tr("Отмена")}</button>
+          {!parseLrc(text).some((l) => l.text) && hlae && (
+            <button type="button" className="chip" disabled={!cleanLyrics(text).length}
+              title={tr("Нейросеть послушает трек и сама поставит каждую строку на свое место. Первый раз скачает ~170 МБ.")}
+              onClick={() => { const ls = cleanLyrics(text).map((t) => ({ text: t, t: null })); setRows(ls); setCur(0); autoTime(ls); }}>
+              {tr("Расставить тайминги сами")}
+            </button>
+          )}
           <button type="button" className="chip is-on" disabled={!text.trim()} onClick={apply}>
             {parseLrc(text).some((l) => l.text) ? tr("Применить") : tr("Дальше →")}
           </button>
@@ -621,12 +702,15 @@ function LyricsEditor({ path, initial, onDone, onCancel }) {
           {player.playing ? <>{tr("жми")} <kbd>{tr("Пробел")}</kbd> {tr("в начале каждой строки ·")} <kbd>Backspace</kbd> {tr(" - назад")}</> : tr("включи трек, чтобы размечать")}
         </span>
         <span className="chips__spacer" />
+        {hlae && <button type="button" className="chip" disabled={!!auto} onClick={() => autoTime()}>{tr("Авто-тайминг")}</button>}
         <button type="button" className="chip mu-tap" disabled={!player.playing || cur >= rows.length} onClick={tap}>{tr("Строка ↵")}</button>
       </div>
+      {autoBar}
       <ol className="mu-rows" ref={listRef}>
         {rows.map((r, i) => (
-          <li key={i} className={`${i === cur ? "is-cur" : ""} ${r.t != null ? "is-set" : ""}`} onClick={() => jump(i)}>
-            <span className="mono dim">{r.t != null ? fmt(r.t) : "-:--"}</span>{r.text}
+          <li key={i} className={`${i === cur ? "is-cur" : ""} ${r.t != null ? "is-set" : ""} ${i === live ? "is-live" : ""}`} onClick={() => jump(i)}>
+            <span className="mono dim">{r.t != null ? fmt(r.t) : "-:--"}</span>
+            <em className="mu-words">{i === live ? sungWords(i) : r.text}</em>
           </li>
         ))}
       </ol>
@@ -726,12 +810,27 @@ export function MusicPanel({ music, setMusic, hlae, clipLen, Toggle, Hint }) {
   const findLyrics = async (artist, title, duration) => {
     setBusy(tr("ищу текст...")); setErr("");
     try {
-      const list = JSON.parse(await invoke("lyrics_search", { artist, title }));
-      const synced = list.filter((x) => x.syncedLyrics);
+      // точный поиск, потом общий по строке «исполнитель название» — первый, где нашёлся
+      // синхронизированный текст именно этой песни: общий поиск находит и чужие песни с тем же
+      // названием («911» у десятка исполнителей), поэтому исполнитель должен совпасть, а длительность —
+      // быть рядом с файлом
+      const same = (x) => {
+        const a = norm(artist), b = norm(x.artistName || "");
+        const artistOk = !a || (b && (b.includes(a) || a.includes(b)));
+        const durOk = !duration || !x.duration || Math.abs(x.duration - duration) <= 10;
+        return artistOk && durOk;
+      };
+      const tries = [{ artist, title }, ...(artist ? [{ artist: "", title, q: `${artist} ${title}` }] : [])];
+      let synced = [];
+      for (const t of tries) {
+        const list = JSON.parse(await invoke("lyrics_search", t));
+        synced = list.filter((x) => x.syncedLyrics && same(x));
+        if (synced.length) break;
+      }
       // ближайший по длительности к файлу трека
       synced.sort((a, b) => Math.abs((a.duration || 0) - duration) - Math.abs((b.duration || 0) - duration));
       const best = synced[0];
-      if (!best) { set({ lrc: "" }); setErr(tr("Синхронизированный текст не найден - трек будет без текста")); }
+      if (!best) { set({ lrc: "" }); setErr(tr("В базе текстов этой песни нет. Нажми «Вставить свой», вставь текст - тайминги расставятся сами.")); }
       else {
         const l = parseLrc(best.syncedLyrics);
         set({ lrc: best.syncedLyrics, start: pickChorus(l, len) });
@@ -812,7 +911,7 @@ export function MusicPanel({ music, setMusic, hlae, clipLen, Toggle, Hint }) {
                 </button>
               </div>
               {editing && (
-                <LyricsEditor key={music.path} path={music.path} initial={music.lrc}
+                <LyricsEditor key={music.path} path={music.path} hlae={hlae} initial={music.lrc}
                   onCancel={() => setEditing(false)}
                   onDone={(lrc) => {
                     setErr(""); setEditing(false);
