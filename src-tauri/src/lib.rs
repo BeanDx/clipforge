@@ -1,5 +1,6 @@
 mod ffmpeg;
 mod gallery;
+mod hlae;
 mod montage;
 mod music;
 mod overlay;
@@ -39,6 +40,7 @@ pub fn run() {
       skins::rewrite_skins,
       ffmpeg::ffmpeg_status,
       ffmpeg::ensure_ffmpeg,
+      hlae::ensure_hlae,
       gallery::list_clips,
       gallery::clip_thumb,
       gallery::reveal_clip,

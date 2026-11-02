@@ -72,6 +72,8 @@ pub fn locate_hlae(current: String) -> Option<String> {
         r"C:\Program Files (x86)\HLAE\HLAE.exe".to_string(),
         r"C:\Program Files\HLAE\HLAE.exe".to_string(),
     ];
+    // своя копия, которую программа скачала сама (hlae.rs)
+    cands.push(crate::hlae::own_dir().join("HLAE.exe").to_string_lossy().into_owned());
     for var in ["LOCALAPPDATA", "USERPROFILE"] {
         if let Ok(base) = std::env::var(var) {
             cands.push(format!(r"{base}\HLAE\HLAE.exe"));
