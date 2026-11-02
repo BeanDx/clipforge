@@ -63,7 +63,7 @@ pub async fn clip_thumb(hlae: String, path: String) -> Result<ClipThumb, String>
             return Ok(t);
         }
     }
-    let ff = Path::new(&hlae).parent().ok_or("неверный путь к HLAE")?.join("ffmpeg").join("bin").join("ffmpeg.exe");
+    let ff = crate::ffmpeg::find(&hlae).ok_or("не найден ffmpeg")?;
     let mut cmd = Command::new(&ff);
     cmd.args(["-hide_banner", "-y", "-sseof", "-2.5", "-i"]).arg(&src)
         .args(["-frames:v", "1", "-vf", "scale=640:-2", "-q:v", "4"]).arg(&jpg);

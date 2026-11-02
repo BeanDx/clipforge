@@ -48,6 +48,9 @@ pub struct Clip {
     pub music_fade_in: Option<bool>,
     #[serde(default)]
     pub music_fade_out: Option<bool>,
+    // ночной вид (пресет Night): звёздное небо вместо дневного, ночной цвет, светящееся оружие в руках
+    #[serde(default)]
+    pub night: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -145,6 +148,9 @@ pub struct Job {
     merge: bool,
     #[serde(default)]
     keep_parts: bool,
+    // монтаж из нескольких демок: клипы — отдельными файлами part_NN.mp4 в эту папку, без ролика и уведомления
+    #[serde(default)]
+    parts_dir: Option<String>,
 }
 fn yes() -> bool { true }
 
@@ -310,7 +316,7 @@ fn one() -> f32 { 1.0 }
 
 // Удар камеры на каждый удар трека: кадр резко приближается и за ~0.13 с отпускает,
 // в режиме тряски ещё и смещается в пределах этого приближения. E(t) — сумма затуханий.
-fn beat_filter(beats: &[f64], mode: &str, amount: f32, w: u32, h: u32) -> Option<String> {
+pub(crate) fn beat_filter(beats: &[f64], mode: &str, amount: f32, w: u32, h: u32) -> Option<String> {
     if beats.is_empty() { return None; }
     let env = beats.iter()
         .map(|b| format!("if(gte(t,{b:.3}),exp(-(t-{b:.3})/0.13),0)"))
@@ -328,21 +334,36 @@ fn beat_filter(beats: &[f64], mode: &str, amount: f32, w: u32, h: u32) -> Option
 // Вспышка на килле: за 0.06 с до него кадр мягко засвечивается размытой копией самого себя
 // (screen-смешивание даёт свечение) с лёгким оттенком, потом за ~0.25 с плавно гаснет.
 // kills — секунды киллов уже на итоговой шкале. Фильтры работают только в окнах вспышек.
-fn flash_filter(kills: &[f64], color: &str, h: u32) -> Option<String> {
+// Сила вспышки меняется командами sendcmd (dir/flash.cmd) раз в кадр: раньше она была формулой
+// blend по каждому пикселю со всеми киллами сразу — эдит с 20 киллами собирался ~12 минут.
+// ffmpeg надо запускать с текущей папкой dir (в графе — относительное имя файла команд).
+pub(crate) fn flash_filter(kills: &[f64], color: &str, h: u32, dir: &Path) -> Option<String> {
     if kills.is_empty() { return None; }
-    let env = kills.iter().map(|k| {
-        let a = k - 0.06;
-        format!("if(between(T,{a:.3},{k:.3}),pow((T-{a:.3})/0.06,2),if(between(T,{k:.3},{e:.3}),exp(-(T-{k:.3})/0.25),0))", e = k + 0.9)
-    }).collect::<Vec<_>>().join("+");
-    let e = format!("min(1,{env})");
+    let env = |t: f64| kills.iter().map(|&k| {
+        if t >= k - 0.06 && t < k { ((t - k + 0.06) / 0.06).powi(2) }
+        else if t >= k && t <= k + 0.9 { (-(t - k) / 0.25).exp() } else { 0.0 }
+    }).sum::<f64>().min(1.0);
+    let end = kills.iter().cloned().fold(0.0, f64::max) + 1.0;
+    let (mut cmds, mut prev, mut f) = (String::new(), -1.0, 0u32);
+    loop {
+        let t = f as f64 / 240.0;
+        if t > end { break; }
+        let v = (env(t) * 0.85 * 1000.0).round() / 1000.0;
+        if v != prev { cmds += &format!("{t:.4} blend@kf all_opacity {v};\n"); prev = v; }
+        f += 1;
+    }
+    fs::write(dir.join("flash.cmd"), cmds).ok()?;
     let enable = kills.iter().map(|k| format!("between(t,{:.3},{:.3})", k - 0.06, k + 0.9)).collect::<Vec<_>>().join("+");
-    // сдвиг цветоразностных каналов (Cb, Cr): розовый, золотой или чисто белый
-    let (cb, cr) = match color { "white" => (0, 0), "gold" => (-12, 8), _ => (4, 12) };
+    // оттенок свечения (в RGB): розовый, золотой или чисто белый
+    let tint = match color {
+        "white" => "",
+        "gold" => ",colorchannelmixer=rr=1.08:gg=0.98:bb=0.8",
+        _ => ",colorchannelmixer=rr=1.08:rb=0.06:gg=0.86:bb=1.06:br=0.05",
+    };
     let sigma = (h as f64 / 27.0).round();
     Some(format!(
-        "format=yuv420p,split[kfa][kfb];[kfb]gblur=sigma={sigma}:enable='{enable}'[kfg];\
-         [kfa][kfg]blend=c0_expr='A+((255-(255-A)*(255-B)/255)-A)*0.8*{e}+(255-A)*0.15*{e}'\
-         :c1_expr='A+{cb}*{e}':c2_expr='A+{cr}*{e}':enable='{enable}'"
+        "sendcmd=f=flash.cmd,format=gbrp,split[kfa][kfb];[kfb]gblur=sigma={sigma}:enable='{enable}'{tint}[kfg];\
+         [kfa][kfg]blend@kf=all_mode=screen:all_opacity=0:enable='{enable}',format=yuv420p"
     ))
 }
 
@@ -407,11 +428,11 @@ pub(crate) fn no_window(cmd: &mut Command) {
 }
 
 fn ffmpeg_path(hlae: &str) -> Option<PathBuf> {
-    Some(Path::new(hlae).parent()?.join("ffmpeg").join("bin").join("ffmpeg.exe"))
+    crate::ffmpeg::find(hlae)
 }
 
 // Аргументы видеокодека; q — целевое качество в шкале crf (меньше = лучше).
-fn codec_args(enc: Option<&str>, q: u32) -> Vec<String> {
+pub(crate) fn codec_args(enc: Option<&str>, q: u32) -> Vec<String> {
     let q = q.to_string();
     let a: Vec<&str> = match enc {
         Some("h264_nvenc") => vec!["-c:v", "h264_nvenc", "-preset", "p5", "-tune", "hq", "-rc", "vbr", "-cq", &q, "-b:v", "0", "-pix_fmt", "yuv420p"],
@@ -496,7 +517,7 @@ fn slowmo_segments(kills: &[f64], drops: &[f64]) -> Vec<(f64, Option<f64>, f64)>
 // Замедление звука отрезка. rubberband в режиме для ударных сохраняет атаку выстрелов и точную
 // длину; atempo на коротких отрезках двоит выстрелы и теряет сэмплы (звук уезжал до 0.7 с) — он
 // только запасной вариант для ffmpeg без rubberband. atempo принимает 0.5..100, поэтому цепочкой.
-fn stretch(s: f64, rubberband: bool) -> String {
+pub(crate) fn stretch(s: f64, rubberband: bool) -> String {
     if rubberband {
         return format!("rubberband=tempo={s}:transients=crisp:detector=percussive:phase=independent:window=short");
     }
@@ -664,8 +685,12 @@ pub async fn faceit_levels(key: String, steamids: Vec<String>) -> Result<HashMap
 
 // Углы обзора игрока по тикам клипов — для текста песни, закреплённого в мире (scripts/cam.cjs)
 #[tauri::command]
-pub async fn parse_cam(path: String, steamid: String, ranges: String) -> Result<String, String> {
-    run_node("cam.cjs", &[&path, &steamid, &ranges])
+pub async fn parse_cam(path: String, steamid: String, ranges: String, victims: Option<String>) -> Result<String, String> {
+    // victims — жертвы по клипам (рамка на цели в пресете Night): тогда ещё и позиции глаза и целей
+    match victims {
+        Some(v) => run_node("cam.cjs", &[&path, &steamid, &ranges, &v]),
+        None => run_node("cam.cjs", &[&path, &steamid, &ranges]),
+    }
 }
 
 // Сохраняет файл из сырого тела запроса (кадры HUD). Путь — в заголовке x-path, закодирован
@@ -709,19 +734,24 @@ pub async fn parse_demo(path: String) -> Result<String, String> {
 // cfg_dir — папка cfg игры: туда же кладём XML путей камеры (mirv_campath load берёт полный путь)
 fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, String, Vec<(String, String)>) {
     let mut c = String::new();
-    // Встроенный пресет HLAE (кодирует через ffmpeg из папки HLAE). Финальное качество (crf) задаём уже при пост-обработке.
+    // Свои ffmpeg-настройки HLAE. Если в папке HLAE нет ffmpeg\bin\ffmpeg.exe, путь к ffmpeg
+    // (из ffmpeg.ini HLAE или своя копия) передаём явно — см. ffmpeg.rs. Финальное качество (crf)
+    // задаём уже при пост-обработке.
+    let exe = crate::ffmpeg::for_hlae(&j.hlae);
     c += "mirv_streams record screen enabled 1\n";
-    match j.gpu_encoder.as_deref() {
-        // Своя ffmpeg-настройка HLAE: промежуточная запись тоже на GPU. q=18 визуально без потерь;
-        // q=14 при 360 fps давал ~1 Гбит/с (6.7 ГБ на 50-секундный клип).
-        Some(enc) => {
-            c += &format!(
-                "mirv_streams settings add ffmpeg cfgpu \"{} {{QUOTE}}{{AFX_STREAM_PATH}}\\video.mp4{{QUOTE}}\"\n",
-                codec_args(Some(enc), 18).join(" ")
-            );
-            c += "mirv_streams record screen settings cfgpu\n";
-        }
-        None => c += "mirv_streams record screen settings afxFfmpegYuv420p\n",
+    // Промежуточная запись на GPU, если есть. q=18 визуально без потерь; q=14 при 360 fps давал
+    // ~1 Гбит/с (6.7 ГБ на 50-секундный клип). Без GPU — как встроенный afxFfmpegYuv420p.
+    let screen_out = match j.gpu_encoder.as_deref() {
+        Some(enc) => format!("{} {{QUOTE}}{{AFX_STREAM_PATH}}\\video.mp4{{QUOTE}}", codec_args(Some(enc), 18).join(" ")),
+        None => "-c:v libx264 -pix_fmt yuv420p -preset slow -crf 22 {QUOTE}{AFX_STREAM_PATH}\\video.mp4{QUOTE}".to_string(),
+    };
+    c += &crate::ffmpeg::hlae_setting("cfrec", &screen_out, exe.as_deref());
+    c += "mirv_streams record screen settings cfrec\n";
+    // ночной вид: маска рук с оружием — отдельным потоком HLAE (cfvm\video.mp4 в take-папке, в оттенках
+    // серого). Небо меняется в самой игре (mirv_sky material, см. sky.rs), поток глубины не нужен.
+    if j.clips.iter().any(|c| c.night) {
+        c += &crate::ffmpeg::hlae_setting("cfgray", "-vf format=gray -c:v libx264 -preset veryfast -crf 16 -pix_fmt yuv420p {QUOTE}{AFX_STREAM_PATH}\\video.mp4{QUOTE}", exe.as_deref());
+        c += "mirv_streams add viewModelMatte cfvm\nmirv_streams edit cfvm settings cfgray\n";
     }
     c += &format!("mirv_streams record fps {}\n", rec_fps);
     // HLAE пишет сырые take-папки (video.mp4 + audio.wav) во временную папку, в out попадают только готовые клипы
@@ -755,11 +785,13 @@ fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, Str
     let mut marks: HashSet<u32> = HashSet::new();
     for (i, cl) in j.clips.iter().enumerate() {
         let mut c = String::new();
+        let sky_on = if cl.night { format!("mirv_sky material \"{}\"\n", crate::sky::SKY_MATERIAL) } else { String::new() };
         files.push((
             format!("cf_{}_s", i),
-            format!("spec_player {}\nmirv_streams record start\n", cl.slot),
+            format!("{sky_on}spec_player {}\nmirv_streams record start\n", cl.slot),
         ));
         let mut end = String::from("mirv_streams record end\n");
+        if cl.night { end += "mirv_sky material default\n"; }
         let reps = replays(cl);
         if !reps.is_empty() {
             // после повтора возвращаем расписание оставшихся клипов
@@ -959,8 +991,60 @@ fn out_duration_main(j: &Job, cl: &Clip) -> f64 {
 
 // Пост-обработка одного клипа: блюр, цифры урона, slow-mo, склейка со звуком, свой трек и текст песни.
 // hud_dir / lyr_dir — папки с кадрами HUD и текста песни (ffconcat готовит фронтенд), если включены.
+// Первый видеофайл потока HLAE в take-папке (d/<name>/...)
+fn stream_file(d: &Path, name: &str) -> Option<PathBuf> {
+    fs::read_dir(d.join(name)).ok()?.flatten().map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|x| ["mp4", "mov", "avi", "mkv"].iter().any(|e| x.eq_ignore_ascii_case(e))))
+}
+
+// Доля кадра под маской (порог lut на яркости) по пяти кадрам записи — от 10% до 90% длины.
+// Возвращает самую большую и самую маленькую долю: в одном кадре неба может не быть (камера
+// смотрит в пол), поэтому проверять по одному кадру нельзя — так в первой записи небо и пропало.
+fn mask_coverage(ff: &Path, video: &Path, lut: &str) -> Option<(f64, f64)> {
+    let dur = media_duration(ff, video)?;
+    let mut res: Vec<f64> = Vec::new();
+    for f in [0.1, 0.3, 0.5, 0.7, 0.9] {
+        let mut cmd = Command::new(ff);
+        cmd.args(["-hide_banner", "-loglevel", "error", "-ss", &format!("{:.2}", dur * f), "-i"]).arg(video)
+            .args(["-frames:v", "1", "-vf", &format!("scale=64:36,format=gray,lut=y={lut}"), "-f", "rawvideo", "-"]);
+        no_window(&mut cmd);
+        let Ok(out) = cmd.output() else { continue };
+        if out.stdout.len() < 64 * 36 { continue; }
+        res.push(out.stdout.iter().filter(|&&b| b > 127).count() as f64 / out.stdout.len() as f64);
+    }
+    if res.is_empty() { return None; }
+    Some((res.iter().cloned().fold(0.0, f64::max), res.iter().cloned().fold(1.0, f64::min)))
+}
+
+// Ночной вид клипа (пресет Night) — до всех эффектов, на сырой записи: оружие в руках светится
+// сиреневым по маске HLAE. Небо уже звёздное в самой записи (mirv_sky), карта — как в игре.
+fn night_pre(j: &Job, ff: &Path, d: &Path) -> Option<PathBuf> {
+    let src = d.join("video.mp4");
+    let out = d.join("video_night.mp4");
+    let vm_lut = "if(gte(val\\,10)\\,255\\,0)";
+    // оружие в руках — не больше 45% кадра (иначе поток записал не маску)
+    let vm = stream_file(d, "cfvm").filter(|vp| mask_coverage(ff, vp, vm_lut).is_some_and(|(mx, _)| mx > 0.002 && mx < 0.45))?;
+    let (w, h) = (j.width, j.height);
+    let mut cmd = Command::new(ff);
+    cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-i"]).arg(&src).arg("-i").arg(&vm);
+    // смешивание по маске — в планарном RGB: у маски и кадра должен быть один формат
+    // (в yuv420p цветовые плоскости вдвое уже, и маска ложилась бы на них со сдвигом).
+    // Руки с оружием (viewModelMatte): светлая розово-сиреневая заливка по яркости (тёмные детали
+    // тоже светятся), поверх мягкое свечение того же цвета. Отдельной маски оружия без перчаток
+    // HLAE не даёт: weaponsMatte — это оружие в мире, а не в руках.
+    let g = format!(
+        "[1:v]scale={w}:{h},format=gray,lut=y={vm_lut},gblur=sigma=0.8,split[m1][m2];[m1]format=gbrp[m1g];[0:v]format=gbrp,split[vb][vt];\
+         [vt]hue=s=0,format=gbrp,lutrgb=r=val*0.75+95:g=val*0.45+25:b=val*0.7+125,split[t1][t2];\
+         [vb][t1][m1g]maskedmerge[vw];[t2]format=rgba[t2a];[t2a][m2]alphamerge,gblur=sigma=16[glow];[vw][glow]overlay=format=rgb,format=yuv420p[out]"
+    );
+    cmd.arg("-filter_complex").arg(&g).args(["-map", "[out]"]).args(codec_args(None, 14)).arg(&out);
+    no_window(&mut cmd);
+    (cmd.status().map(|s| s.success()).unwrap_or(false) && out.exists()).then_some(out)
+}
+
 fn finish_take(j: &Job, ff: &Path, d: &Path, clip: &Clip, dst: &Path, hud_dir: Option<&Path>, lyr_dir: Option<&Path>, on_progress: &dyn Fn(f64)) -> bool {
-    let (v, a) = (d.join("video.mp4"), d.join("audio.wav"));
+    let night = if clip.night { night_pre(j, ff, d) } else { None };
+    let (v, a) = (night.unwrap_or_else(|| d.join("video.mp4")), d.join("audio.wav"));
     let has_audio = a.exists();
     let hud = hud_dir.map(|h| h.join("hud.ffconcat")).filter(|p| p.exists());
     let lyr = lyr_dir.map(|h| h.join("lyrics.ffconcat")).filter(|p| p.exists());
@@ -1001,7 +1085,7 @@ fn finish_take(j: &Job, ff: &Path, d: &Path, clip: &Clip, dst: &Path, hud_dir: O
             .map(|&k| (k as f64 - clip.start as f64) / TICKRATE)
             .filter(|&t| t >= 0.0)
             .map(|t| out_time(&segs, t)).collect();
-        if let Some(ff) = flash_filter(&kills, &j.flash_color, j.height) {
+        if let Some(ff) = flash_filter(&kills, &j.flash_color, j.height, d) {
             filter += &format!(";{vout}{ff}[vflash]");
             vout = "[vflash]";
         }
@@ -1053,6 +1137,8 @@ fn finish_take(j: &Job, ff: &Path, d: &Path, clip: &Clip, dst: &Path, hud_dir: O
 
     let encode = |enc: Option<&str>| {
         let mut cmd = Command::new(ff);
+        // текущая папка — take: там файл команд вспышки (flash.cmd)
+        cmd.current_dir(d);
         cmd.arg("-y").arg("-i").arg(&v);
         if has_audio { cmd.arg("-i").arg(&a); }
         if let Some(h) = &hud { cmd.args(["-f", "concat", "-safe", "0", "-i"]).arg(h); }
@@ -1191,7 +1277,7 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
             }
         };
         let out = PathBuf::from(&job.out);
-        let ff = hlae_dir.join("ffmpeg").join("bin").join("ffmpeg.exe");
+        let ff = crate::ffmpeg::find(&job.hlae).unwrap_or_else(|| hlae_dir.join("ffmpeg").join("bin").join("ffmpeg.exe"));
         let prefix = stamp.replace('_', " ");
         // HLAE.exe завершается сразу после запуска игры, поэтому следим за самим cs2.exe.
         // Take готов, когда началась следующая запись, игра закрыта, или это последний клип
@@ -1274,14 +1360,17 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
                 handled.insert(d.clone());
                 let clip = job.clips.get(i).cloned().unwrap_or_else(|| Clip {
                     account_id: 0, name: String::new(), round: 0, start: 0, end: 0, slot: 1,
-                    kill_ticks: vec![], hits: vec![], drops: vec![], music_start: None, cine: None, hs_ticks: vec![], music_fade_in: None, music_fade_out: None,
+                    kill_ticks: vec![], hits: vec![], drops: vec![], music_start: None, cine: None, hs_ticks: vec![], music_fade_in: None, music_fade_out: None, night: false,
                 });
                 // "2026-10-30 15-40-12 R05 3K.mp4" — сортируется по времени, как остальные видео в папке
-                let dst = out.join(match (clip.round, clip.kill_ticks.len()) {
-                    (0, _) => format!("{prefix} clip {:02}.mp4", i + 1),
-                    (r, 0) => format!("{prefix} R{r:02}.mp4"),
-                    (r, k) => format!("{prefix} R{r:02} {k}K.mp4"),
-                });
+                let dst = match &job.parts_dir {
+                    Some(pd) => { let _ = fs::create_dir_all(pd); PathBuf::from(pd).join(format!("part_{i:02}.mp4")) }
+                    None => out.join(match (clip.round, clip.kill_ticks.len()) {
+                        (0, _) => format!("{prefix} clip {:02}.mp4", i + 1),
+                        (r, 0) => format!("{prefix} R{r:02}.mp4"),
+                        (r, k) => format!("{prefix} R{r:02} {k}K.mp4"),
+                    }),
+                };
                 // Сырьё удаляем только после удачной склейки — иначе оставляем, чтобы запись не пропала
                 let hud_dir = work.join(format!("hud_{i}"));
                 let hud = (job.hud == "match").then_some(hud_dir.as_path());
@@ -1294,8 +1383,13 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
                         path: dst.to_string_lossy().to_string(),
                         name: dst.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
                     });
+                    // кусок монтажа с ночным видом: сырьё (с потоками глубины и маски оружия) остаётся рядом
+                    // с кусками — следующая демка очищает кэш, а по нему видно, что записал HLAE
+                    if let (Some(pd), true) = (&job.parts_dir, clip.night) {
+                        let _ = fs::rename(d, PathBuf::from(pd).join(format!("take_night_{i:02}")));
+                    }
                     // сырьё — в кэш для «Пересобрать без игры» (место освобождается следующим рендером)
-                    let kept = d.file_name().is_some_and(|n| fs::rename(d, cache.join(n)).is_ok());
+                    let kept = d.exists() && d.file_name().is_some_and(|n| fs::rename(d, cache.join(n)).is_ok());
                     if !kept { let _ = fs::remove_dir_all(d); }
                     if let (true, Some(n)) = (kept, d.file_name()) {
                         compare.push(CompareItem {
@@ -1337,6 +1431,12 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
         }
         // несколько клипов — один ролик: «2026-11-01 17-36-17 reel 3 clips.mp4». Отдельные клипы
         // уезжают в кэш последнего рендера (там их видит «До / после») или остаются, если так выбрано.
+        // куски для монтажа: склеит build_montage, когда отрендерятся все демки
+        if job.parts_dir.is_some() {
+            let _ = app.emit("render-progress", 100.0_f32);
+            let _ = app.emit("render-done", out.to_string_lossy().to_string());
+            return;
+        }
         if job.merge && done_clips.len() >= 2 {
             let parts: Vec<PathBuf> = done_clips.iter().map(|c| PathBuf::from(&c.path)).collect();
             let reel = out.join(format!("{prefix} reel {} clips.mp4", parts.len()));
@@ -1371,3 +1471,4 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
     });
     Ok(())
 }
+

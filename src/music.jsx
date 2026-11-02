@@ -6,7 +6,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import { tr, trError, useLang } from "./i18n";
-import { LYRIC_STYLES, drawLyricStyle, lyricFont, lyricStyle, snapWords, wordsOf } from "./lyricStyles";
+import { drawDust, drawTargets } from "./nightfx";
+import { LYRIC_STYLES, drawLyricStyle, lyricFont, lyricStyle, snapWords, wordsOf, heartWord } from "./lyricStyles";
 import previewBg from "./assets/previews/lyrics-bg.webp";
 export const MUSIC_DEFAULT = {
   enabled: false, path: "", title: "", artist: "", duration: 0,
@@ -250,9 +251,14 @@ function drawPart(ctx, p, t, cam, proj, k, pi, style, mul) {
   const centered = st.screen;
   // yaw растёт влево: точка левее взгляда имеет rel > 0 и на экране левее центра
   const rel = wrap(p.yaw - cam.yaw);
-  if (Math.abs(rel) > 75 && !centered) return null;
-  const x = centered ? proj.cx : proj.cx - proj.f * Math.tan((rel * Math.PI) / 180);
-  const y = centered ? proj.cy * 0.92 : proj.cy - proj.f * Math.tan(((cam.pitch - p.pitch) * Math.PI) / 180);
+  if (Math.abs(rel) > 75 && !centered && !st.inFrame) return null;
+  let x = centered ? proj.cx : proj.cx - proj.f * Math.tan((Math.max(-75, Math.min(75, rel)) * Math.PI) / 180);
+  let y = centered ? proj.cy * 0.92 : proj.cy - proj.f * Math.tan(((cam.pitch - p.pitch) * Math.PI) / 180);
+  // крупный текст (Night) держится в кадре: висит в мире, но у края останавливается, а не уезжает
+  if (st.inFrame) {
+    x = Math.max(proj.cx * 0.62, Math.min(proj.cx * 1.38, x));
+    y = Math.max(proj.cy * 0.42, Math.min(proj.cy * 1.2, y));
+  }
   // исчезновение: последние 0.6 с строки
   const sc = Math.max(0, Math.min(1, (t - (p.end - 0.6)) / 0.6));
   // слова на ударах трека (стили со snap)
@@ -282,7 +288,8 @@ const ZOOM_QUIET = 2.5, ZOOM_GAP = 5;
 // smart — умная подача: строки, на которые приходится килл, пропускаются (кроме припева), в паузах
 // камера иногда коротко тянется вбок к строке (zoom.json для ffmpeg).
 // Для стилей с multiply рядом пишется второй слой кадров (m*.png, lyrics_mul.ffconcat).
-export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo, drops = [], fov, fps, W, H, save, onFrame, style = "karaoke", beats = [], smart = true }) {
+// night — эффекты пресета Night на тех же кадрах: { dust, eye, targets } (пыль и рамка на цели, src/nightfx.js)
+export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo, drops = [], fov, fps, W, H, save, onFrame, style = "karaoke", beats = [], smart = true, night = null }) {
   const st = lyricStyle(style);
   const cam = smoothCam(rawCam);
   const lines = parseLrc(lrc);
@@ -291,6 +298,19 @@ export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo,
   const counts = new Map();
   for (const l of lines) if (l.text) counts.set(norm(l.text), (counts.get(norm(l.text)) || 0) + 1);
   for (const pt of parts) { pt.chorus = (counts.get(norm(lines[pt.li].text)) || 0) >= 2; pt.beats = beats; }
+  // сердце (стиль Night): вокруг «любовного» слова, иначе вокруг последнего слова первой строки припева;
+  // не чаще раза в 8 секунд, чтобы не приедалось
+  if (style === "night") {
+    let last = -Infinity;
+    const seen = new Set();
+    for (const pt of parts) {
+      const hw = heartWord(pt.text);
+      const firstChorus = pt.chorus && !seen.has(norm(lines[pt.li].text));
+      if (pt.chorus) seen.add(norm(lines[pt.li].text));
+      const idx = hw >= 0 ? hw : firstChorus ? pt.text.split(/\s+/).filter(Boolean).length - 1 : -1;
+      if (idx >= 0 && pt.t0 - last >= 8) { pt.heart = idx; last = pt.t0; }
+    }
+  }
   const base = (clip.end - clip.start) / TICKRATE;
   const killRec = (clip.killTicks || []).map((t) => (t - clip.start) / TICKRATE);
   const kills = slowmo ? killRec : [];
@@ -356,14 +376,17 @@ export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo,
     for (const p of parts) {
       if (p.yaw != null || tTrack < lines[p.li].t) continue;
       anchors[p.li] ??= { yaw: view.yaw, pitch: view.pitch - 7 };
-      p.yaw = anchors[p.li].yaw + p.side * 24;
+      // Night — крупный текст: ближе к центру, иначе уходит за край кадра
+      p.yaw = anchors[p.li].yaw + p.side * (style === "night" ? 9 : 24);
       p.pitch = anchors[p.li].pitch;
     }
     let live = parts.filter((p) => !p.hide && tTrack >= p.t0 && tTrack < p.end);
     // экранный стиль показывает одно слово: только самую свежую строку
     if (st.screen && live.length > 1) live = [live.reduce((a, b) => (b.t0 > a.t0 ? b : a))];
     let name, mname;
-    if (!live.length) {
+    // эффекты Night рисуются на каждом кадре — пустых кадров тогда нет
+    const fxOn = night && (night.dust || night.targets?.length);
+    if (!live.length && !fxOn) {
       if (!blank) { ctx.clearRect(0, 0, W, H); blank = "blank.png"; await save(blank, await pngOf(canvas)); }
       if (mctx && !mblank) { mctx.setTransform(1, 0, 0, 1, 0, 0); mctx.fillStyle = "#fff"; mctx.fillRect(0, 0, W, H); mblank = "mblank.png"; await save(mblank, await pngOf(mcanvas)); }
       name = blank; mname = mblank;
@@ -371,6 +394,10 @@ export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo,
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, W, H);
       if (mctx) { mctx.setTransform(1, 0, 0, 1, 0, 0); mctx.fillStyle = "#fff"; mctx.fillRect(0, 0, W, H); }
+      if (night?.dust) drawDust(ctx, { t: tOut, view, proj, k });
+      if (night?.targets?.length && tOut < mainDur) {
+        drawTargets(ctx, { tick: clip.start + outToIn(segs, tOut) * TICKRATE, eye: night.eye, targets: night.targets, view, proj, k });
+      }
       live.forEach((p) => {
         const at = drawPart(ctx, p, tTrack, view, proj, k, parts.indexOf(p), style, mctx);
         // камера тянется к строке в паузах (первое место, где строка появилась)
@@ -623,8 +650,11 @@ function LyricPreview({ style }) {
     const img = new Image();
     img.src = previewBg;
     const W = cv.width, H = cv.height, k = H / 560;
-    const p = { text: tr("сделал эйс на миде"), t0: 0.35, t1: 2.2, end: 3.7 };
-    document.fonts.load(lyricFont(style, 40), "Aa Яя").catch(() => {});
+    const p = style === "night"
+      ? { text: tr("если я найду тебя"), t0: 0.35, t1: 2.0, end: 3.7 }
+      : { text: tr("сделал эйс на миде"), t0: 0.35, t1: 2.2, end: 3.7 };
+    if (style === "night") p.heart = heartWord(p.text);
+    [lyricFont(style, 40), ...(lyricStyle(style).extraFonts || [])].forEach((f) => document.fonts.load(f, "Aa Яя").catch(() => {}));
     const start = performance.now();
     let raf;
     const loop = (now) => {

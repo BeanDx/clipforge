@@ -1,7 +1,10 @@
+mod ffmpeg;
 mod gallery;
+mod montage;
 mod music;
 mod overlay;
 mod render;
+mod sky;
 mod skins;
 mod toast;
 
@@ -25,13 +28,17 @@ pub fn run() {
       render::close_cs2,
       render::cancel_render,
       render::last_render,
+      montage::build_montage,
       music::track_info,
       music::locate_hlae,
       music::read_audio,
       music::track_beats,
       music::lyrics_search,
+      sky::install_sky,
       skins::scan_items,
       skins::rewrite_skins,
+      ffmpeg::ffmpeg_status,
+      ffmpeg::ensure_ffmpeg,
       gallery::list_clips,
       gallery::clip_thumb,
       gallery::reveal_clip,
@@ -46,6 +53,7 @@ pub fn run() {
       // свой Node и скрипты разбора демок лежат в ресурсах установленной программы (scripts/bundle-parser.cjs)
       if let Ok(dir) = tauri::Manager::path(app).resource_dir() {
         render::set_parser_dir(dir.join("parser"));
+        sky::set_sky_dir(dir.join("sky"));
       }
       if cfg!(debug_assertions) {
         app.handle().plugin(  

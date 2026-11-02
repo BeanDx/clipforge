@@ -17,16 +17,19 @@ import { drawCard } from "./card";
 import { CompareModal } from "./compare";
 import { Gallery } from "./gallery";
 import { LiveStatus } from "./live";
+import { NightEdit } from "./nightedit";
+import { buildSkyEquirect, skyAzOfYaw } from "./nightfx";
 import shotHudMatch from "./assets/previews/hud-match.webp";
 import shotHudDemo from "./assets/previews/hud-demo.webp";
 import "./highlight-renderer.css";
 import { version as APP_VERSION } from "../package.json";
 
 import { tr, trError, getLang, setLang, useLang } from "./i18n";
-const TABS = ["Демо", "Архив", "Хайлайты", "Рендер", "Очередь", "Библиотека", "Настройки"];
+const TABS = ["Демо", "Архив", "Хайлайты", "Эдит", "Рендер", "Очередь", "Библиотека", "Настройки"];
 const DEMO_TAB = TABS.indexOf("Демо");
 const ARCHIVE_TAB = TABS.indexOf("Архив");
 const HIGHLIGHTS_TAB = TABS.indexOf("Хайлайты");
+const EDIT_TAB = TABS.indexOf("Эдит");
 const SETTINGS_TAB = TABS.indexOf("Настройки");
 
 // Вкладки блока «Настройки клипа»
@@ -468,17 +471,35 @@ export default function HighlightRenderer() {
   }, [skinKey, skinPlan]);
   const [fx, setFx] = useState({ slowmo: false, damage: false, xray: false, hideDemoUi: true, hud: "full", camVictim: true, camOrbit: false, killFlash: false, flashColor: "pink", atmo: "", atmoGame: true, hsZoom: false });
 
-  // Аппаратный кодировщик ищем в ffmpeg из папки HLAE: null — нет, undefined — ещё проверяем.
+  // ffmpeg: рядом с HLAE его может не быть (установщик HLAE ставит его отдельно, в zip-версии его нет) —
+  // тогда программа сама скачивает свою копию (src-tauri/src/ffmpeg.rs). ffReady — путь, когда готов.
+  const [ffReady, setFfReady] = useState(null);
+  const [ffLoad, setFfLoad] = useState(null); // [скачано, всего] МБ, пока качается
+  const [ffErr, setFfErr] = useState("");
+  const ensureFfmpeg = useCallback(async () => {
+    setFfErr("");
+    const un = await listen("ffmpeg-progress", (e) => setFfLoad(e.payload));
+    try {
+      const p = await invoke("ensure_ffmpeg", { hlae: paths.hlae });
+      setFfReady(p);
+      return p;
+    } catch (e) { setFfErr(String(e)); throw e; }
+    finally { un(); setFfLoad(null); }
+  }, [paths.hlae]);
+  useEffect(() => { if (paths.hlae) ensureFfmpeg().catch(() => {}); }, [ensureFfmpeg, paths.hlae]);
+
+  // Аппаратный кодировщик ищем в том же ffmpeg: null — нет, undefined — ещё проверяем.
   const [gpuEnc, setGpuEnc] = useState(undefined);
   const [useGpu, setUseGpu] = useState(true);
   useEffect(() => {
     let alive = true;
     setGpuEnc(undefined);
+    if (!ffReady) return;
     invoke("detect_gpu_encoder", { hlae: paths.hlae })
       .then((e) => alive && setGpuEnc(e ?? null))
       .catch(() => alive && setGpuEnc(null));
     return () => { alive = false; };
-  }, [paths.hlae]);
+  }, [paths.hlae, ffReady]);
 
   const resOptions = useMemo(() => RESOLUTIONS.filter((r) => r.ratio === aspect), [aspect]);
   const res = resOptions.find((r) => r.id === resId) ?? resOptions[0];
@@ -502,6 +523,7 @@ export default function HighlightRenderer() {
   const [compareList, setCompareList] = useState([]);
   const [compareOpen, setCompareOpen] = useState(false);
   const cancelRef = useRef(false); // нажата «Остановить» во время подготовки
+  const waitRef = useRef(null); // { resolve, reject } текущего рендера — монтаж ждёт каждую демку
   const fileRef = useRef(null);
   const appRef = useRef(null);
   useInteractionFx(appRef);
@@ -645,10 +667,10 @@ const voicePayload = useMemo(() => {
   useEffect(() => {
     const subs = [
       listen("render-progress", (e) => setProgress(e.payload)),
-      listen("render-done", () => { setRendering(false); setStage(""); setProgress(100); }),
+      listen("render-done", () => { setRendering(false); setStage(""); setProgress(100); waitRef.current?.resolve(); waitRef.current = null; }),
       // «Смотреть» в уведомлении «хайлайт готов» — открываем клип на вкладке «Хайлайты»
       listen("open-clip", (e) => { setOpenClip(String(e.payload)); setTab(HIGHLIGHTS_TAB); }),
-      listen("render-error", (e) => { setRendering(false); setStage(""); setError(String(e.payload)); }),
+      listen("render-error", (e) => { setRendering(false); setStage(""); setError(String(e.payload)); waitRef.current?.reject(new Error(String(e.payload))); waitRef.current = null; }),
     ];
     return () => subs.forEach((p) => p.then((f) => f()));
   }, []);
@@ -657,14 +679,21 @@ const voicePayload = useMemo(() => {
     Number.isInteger(Number(playerSlot)) &&
     Number(playerSlot) >= 1 && Number(playerSlot) <= 10;
 
-  // reuse — «Пересобрать без игры»: эффекты заново на сырой записи прошлого рендера
-  const startRender = async (reuse = false) => {
-    if (!validSlot) {
+  // reuse — «Пересобрать без игры»: эффекты заново на сырой записи прошлого рендера.
+  // o — кусок монтажа (вкладка «Эдит»): своя демка, игрок и клипы { demoPath, steamid, roster, clips, partsDir };
+  // у клипов с night — ночной вид, пыль, рамка на цели и текст песни (без самого трека: он ляжет при монтаже).
+  // Возвращает промис, который ждёт конца рендера (render-done).
+  const startRender = async (reuse = false, o = null) => {
+    if (!o && !validSlot) {
       setError(tr("Не удалось определить слот игрока в демке - попробуй другую демку или сообщи разработчику"));
       return;
     }
+    const demoPath0 = o?.demoPath ?? demo.path;
+    const pid = o?.steamid ?? playerId;
+    const ros = o?.roster ?? roster;
+    const fxJob = o ? { ...fx, slowmo: false, camVictim: false, camOrbit: false, hsZoom: false, killFlash: false, atmo: "" } : fx;
     const { width, height, crf } = res;
-    const sel = myClips
+    const sel = o ? o.clips : myClips
       .filter((c) => picked.has(c.round))
       .map((c) => trim
         ? { ...c, start: Math.max(0, c.start + Math.round((1.5 - pad.before) * 64)), end: c.end + Math.round((pad.after - 2) * 64) }
@@ -676,7 +705,7 @@ const voicePayload = useMemo(() => {
       }));
     // замедление на припеве: момент в записи каждого клипа, который придётся на начало припева
     // «припев на последний килл» — ещё и своё начало трека для каждого клипа (musicStart)
-    if (music.enabled && music.path && music.chorusSlow && music.lrc) {
+    if (!o && music.enabled && music.path && music.chorusSlow && music.lrc) {
       for (const c of sel) {
         const onKill = music.chorusOnKill !== false && alignChorusToKill({ lrc: music.lrc, start: music.start, clip: c, slowmo: fx.slowmo });
         if (onKill) { c.musicStart = onKill.start; c.drops = onKill.drops; }
@@ -684,7 +713,7 @@ const voicePayload = useMemo(() => {
       }
     }
     // HLAE не запускает вторую CS2 («already running») — предлагаем закрыть открытую
-    if (!reuse && await invoke("cs2_running").catch(() => false)) {
+    if (!reuse && !o && await invoke("cs2_running").catch(() => false)) {
       const ok = await ask(tr("CS2 уже запущена (например, осталась от прошлого рендера). Закрыть ее и начать рендер?"),
         { title: "clipforge", kind: "warning", okLabel: tr("Закрыть и начать"), cancelLabel: tr("Отмена") });
       if (!ok) return;
@@ -694,17 +723,24 @@ const voicePayload = useMemo(() => {
     // подготовка (HUD, скины) идёт до запуска игры — между шагами проверяем «Остановить»
     const stopped = () => { if (cancelRef.current) throw new Error(tr("рендер остановлен")); };
     const stamp = renderStamp();
+    const done = new Promise((resolve, reject) => { waitRef.current = { resolve, reject }; });
+    done.catch(() => {});
     try {
+      // без ffmpeg не запишется и не соберётся ничего — если его ещё нет, сначала скачиваем
+      if (!ffReady) {
+        setStage(tr("скачиваю ffmpeg..."));
+        await ensureFfmpeg();
+      }
       if (!reuse) {
         setStage(tr("закрываю CS2..."));
         await invoke("close_cs2");
         setStage("");
       }
-      if (fx.hud === "match") {
+      if (fxJob.hud === "match") {
         // Кадры HUD готовим заранее: по одной папке hud_N на клип внутри временной папки рендера
         setStage(tr("готовлю HUD..."));
         const states = JSON.parse(await invoke("parse_hud", {
-          path: demo.path, steamid: playerId, ranges: JSON.stringify(sel.map((c) => [c.start, c.end])),
+          path: demoPath0, steamid: pid, ranges: JSON.stringify(sel.map((c) => [c.start, c.end])),
         }));
         await fontsReady();
         const work = await join(paths.out, ".clipforge_tmp", stamp);
@@ -718,7 +754,7 @@ const voicePayload = useMemo(() => {
       }
       // кинокамера: повтор глазами каждой жертвы клипа (по очереди после клипа) и облёт на последнем фраге.
       // Повторы нужны и при пересборке без игры — по ним считается длина клипа (они уже есть в записи).
-      if (fx.camVictim || (!reuse && fx.camOrbit)) {
+      if (fxJob.camVictim || (!reuse && fxJob.camOrbit)) {
         setStage(tr("кинокамера..."));
         const kills = sel.map((c) => c.killTicks?.[c.killTicks.length - 1] ?? null);
         const orbitOn = !reuse && fx.camOrbit;
@@ -741,21 +777,29 @@ const voicePayload = useMemo(() => {
       }
       // Клипы склеиваются в один ролик — песня идёт через них подряд, без перескоков назад
       // (длина клипа известна только теперь: в неё входят повторы глазами жертв)
-      if (merge.on && sel.length >= 2 && music.enabled && music.path) {
+      if (!o && merge.on && sel.length >= 2 && music.enabled && music.path) {
         chainMusic({ clips: sel, lrc: music.lrc, start: music.start, slowmo: fx.slowmo,
           chorusSlow: !!music.chorusSlow, chorusOnKill: music.chorusOnKill !== false });
       }
       // Текст песни: кадры на каждый клип (папки lyr_N), накладываются после slow-mo
-      const withMusic = music.enabled && music.path;
-      if (withMusic && music.showLyrics && music.lrc) {
+      // в кусках монтажа трека нет (он ляжет при сборке), но текст песни нужен клипу-интро
+      const withMusic = !o && music.enabled && music.path;
+      const lyricsOn = music.enabled && music.path && music.showLyrics && music.lrc;
+      const nightOn = sel.some((c) => c.night);
+      if ((withMusic && lyricsOn) || nightOn) {
         setStage(tr("текст песни: углы камеры..."));
-        // куда смотрела камера на каждом тике клипов — текст «закрепляется» в мире
-        const cams = JSON.parse(await invoke("parse_cam", {
-          path: demo.path, steamid: playerId, ranges: JSON.stringify(sel.map((c) => [c.start, c.end])),
+        // куда смотрела камера на каждом тике клипов — текст «закрепляется» в мире;
+        // для ночных клипов ещё глаз игрока и жертвы перед киллами (рамка на цели)
+        const victims = nightOn ? JSON.stringify(sel.map((c) => (c.night ? (c.rawTicks || c.killTicks || []).map((t, j) => [c.victims?.[j], t]).filter(([v]) => v) : []))) : null;
+        const camData = JSON.parse(await invoke("parse_cam", {
+          path: demoPath0, steamid: pid, ranges: JSON.stringify(sel.map((c) => [c.start, c.end])), victims,
         }));
+        const cams = camData.map((d) => (Array.isArray(d) ? d : d.cam));
         const work = await join(paths.out, ".clipforge_tmp", stamp);
         for (let i = 0; i < sel.length; i++) {
           stopped();
+          // в монтаже текст только у интро; у остальных кусков нечего рисовать
+          if (o && !sel[i].night) continue;
           const dir = await join(work, `lyr_${i}`);
           const save = (name, bytes) => invoke("save_file", bytes, { headers: { "x-path": encodeURIComponent(`${dir}\\${name}`) } });
           // для стилей «под бит» слова встают на удары трека: находим их в куске под этот клип
@@ -763,18 +807,30 @@ const voicePayload = useMemo(() => {
           const beats = lyricStyle(music.lyricStyle).snap
             ? (await invoke("track_beats", { hlae: paths.hlae, path: music.path, offset: lyricStart, dur: 120 }).catch(() => [])).map((b) => lyricStart + b)
             : [];
+          const nd = sel[i].night && !Array.isArray(camData[i]) ? camData[i] : null;
           const list = await renderLyricFrames({
-            lrc: music.lrc, start: sel[i].musicStart ?? music.start, clip: sel[i], cam: cams[i] || [], slowmo: fx.slowmo, drops: sel[i].drops || [], fov, fps,
-            W: width, H: height, save, style: music.lyricStyle, beats, smart: music.smartLyrics !== false,
+            lrc: lyricsOn ? music.lrc : "", start: sel[i].musicStart ?? music.start, clip: sel[i], cam: cams[i] || [], slowmo: fxJob.slowmo, drops: sel[i].drops || [], fov, fps,
+            W: width, H: height, save, style: o ? "night" : music.lyricStyle, beats, smart: o ? false : music.smartLyrics !== false,
+            night: nd ? { dust: true, eye: nd.eye, targets: nd.targets } : null,
             onFrame: (f, n) => { stopped(); setStage(tr("текст песни: клип {0}/{1} · {2}%", i + 1, sel.length, Math.round((f / n) * 100))); },
           });
           await save("lyrics.ffconcat", new TextEncoder().encode(list));
+          // звёздное небо — настоящий скайбокс игры (sky.rs, mirv_sky material). Луна встаёт чуть левее
+          // того, куда игрок смотрит в начале интро, чтобы сразу была в кадре
+          if (sel[i].night) {
+            setStage(tr("ночное небо: клип {0}/{1}", i + 1, sel.length));
+            const yaw0 = cams[i]?.[0]?.[2] ?? 0;
+            const sky = buildSkyEquirect(skyAzOfYaw(yaw0 + 14));
+            const png = await new Promise((ok, fail) => sky.toBlob((b) => (b ? b.arrayBuffer().then((a) => ok(new Uint8Array(a)), fail) : fail(new Error("toBlob"))), "image/png"));
+            await save("night_sky.png", png);
+            await invoke("install_sky", { cs2: paths.cs2, png: `${dir}\\night_sky.png` });
+          }
         }
       }
       // Скины: игра проигрывает переписанную копию демки, оригинал не трогаем
-      let demoPath = demo.path;
+      let demoPath = demoPath0;
       // скины — часть записи: при пересборке без игры они уже такие, какими были записаны
-      if (!reuse && !planIsEmpty(skinPlan)) {
+      if (!reuse && !o && !planIsEmpty(skinPlan)) {
         setStage(tr("перекрашиваю демку..."));
         demoPath = await join(paths.out, ".clipforge_tmp", stamp, "skins.dem");
         await invoke("rewrite_skins", {
@@ -784,16 +840,23 @@ const voicePayload = useMemo(() => {
       }
       stopped();
       setStage("");
+      if (o) demoPath = demoPath0;
       await invoke("start_render", { job: { demo: demoPath, hlae: paths.hlae, cs2: paths.cs2, out: paths.out,
         clips: sel, fps, blur, fov, width, height, crf, vmFov: vm.fov, vmX: vm.x, vmY: vm.y, vmZ: vm.z,
         voiceIndices: voicePayload.indices, voiceIndicesHigh: voicePayload.indicesHigh,
-        gpuEncoder: useGpu && gpuEnc ? gpuEnc : null, ...fx, stamp, startKey, stretch: stretch && aspect === "4:3", merge: merge.on, keepParts: merge.keep,
+        gpuEncoder: useGpu && gpuEnc ? gpuEnc : null, ...fxJob, stamp, startKey, stretch: stretch && aspect === "4:3", merge: o ? false : merge.on, keepParts: merge.keep,
+        partsDir: o?.partsDir ?? null,
         music: withMusic ? {
           path: music.path, offset: music.start, musicVol: music.musicVol, gameVol: music.gameVol,
           beatFx: music.beatFx ? music.beatMode || "zoom" : null, beatAmount: music.beatAmount ?? 1,
         } : null,
         reuseLast: reuse } });
-    } catch (e) { setRendering(false); setStage(""); setError(String(e.message || e)); }
+    } catch (e) {
+      setRendering(false); setStage(""); setError(String(e.message || e));
+      waitRef.current = null;
+      throw e;
+    }
+    return done;
   };
 
   // «Остановить»: до запуска игры прерывает подготовку, после — Rust закрывает игру и выходит
@@ -836,8 +899,37 @@ const voicePayload = useMemo(() => {
         <LiveStatus cs2={paths.cs2} rendering={rendering} progress={progress} archiveCount={archive.length}
           onOpen={(path) => { setTab(0); loadPath(path); }} />
       </nav>
+      {/* ffmpeg качается сам, если его нет рядом с HLAE: показываем, сколько осталось, или ошибку с повтором */}
+      {(ffLoad || ffErr) && (
+        <div className={`ff-bar ${ffErr ? "is-err" : ""}`} role="status">
+          {ffLoad ? (
+            <>
+              <span className="mono">{tr("скачиваю ffmpeg для записи: {0} / {1} МБ", Math.round(ffLoad[0]), ffLoad[1] ? Math.round(ffLoad[1]) : "?")}</span>
+              <span className="ff-bar__track"><i style={{ width: ffLoad[1] ? `${(ffLoad[0] / ffLoad[1]) * 100}%` : "30%" }} /></span>
+            </>
+          ) : (
+            <>
+              <span className="mono">{trError(ffErr)}</span>
+              <button type="button" className="chip" onClick={() => ensureFfmpeg().catch(() => {})}>{tr("Повторить")}</button>
+            </>
+          )}
+        </div>
+      )}
 
-      {tab === HIGHLIGHTS_TAB ? (
+      {tab === EDIT_TAB ? (
+        <main className="grid" key={tab}>
+          <NightEdit Frame={Frame} Hint={Hint} archive={archive} cs2={paths.cs2} hlae={paths.hlae} out={paths.out}
+            music={music} playerId={playerId} rendering={rendering} progress={progress} stage={stage}
+            video={{
+              fps, height: res.height, crf: res.crf, gpu: useGpu && gpuEnc ? gpuEnc : null,
+              // куски 4:3 уже растянуты до 16:9 той же высоты (как в render.rs) — эдит того же размера
+              width: stretch && aspect === "4:3" ? Math.round((res.height * 16) / 9 / 2) * 2 : res.width,
+            }}
+            renderPart={(o) => startRender(false, o)}
+            onDone={(file, show) => { if (show) { setOpenClip(file); setTab(HIGHLIGHTS_TAB); } }}
+            onGoSound={() => { setTab(DEMO_TAB); setStudioTab("sound"); }} />
+        </main>
+      ) : tab === HIGHLIGHTS_TAB ? (
         <main className="grid" key={tab}>
           <Gallery hlae={paths.hlae} out={paths.out} refreshKey={`${rendering}${openClip}`} openPath={openClip} onOpened={() => setOpenClip(null)} />
         </main>
@@ -1334,7 +1426,7 @@ const voicePayload = useMemo(() => {
             ) : (
               <div className="launch__btns">
                 {lastRender && (
-                  <button type="button" className="go go--ghost go--reuse" disabled={!canRender} onClick={() => startRender(true)}
+                  <button type="button" className="go go--ghost go--reuse" disabled={!canRender} onClick={() => startRender(true).catch(() => {})}
                     title={tr("Заново наложить музыку, текст, замедления, цифры урона и HUD на запись прошлого рендера - без запуска CS2. Клипы и разрешение должны совпадать; скины, X-ray, FOV и viewmodel остаются как были записаны.")}>
                     {tr("Пересобрать без игры")}
                     <small className="mono">{lastRender.clips.length} {tr("клип. ·")} {lastRender.width}×{lastRender.height}</small>
@@ -1346,7 +1438,7 @@ const voicePayload = useMemo(() => {
                     {tr("До / после")}
                   </button>
                 )}
-                <button type="button" className="go" disabled={!canRender} onClick={() => startRender(false)}>{tr("Запустить рендер")}</button>
+                <button type="button" className="go" disabled={!canRender} onClick={() => startRender(false).catch(() => {})}>{tr("Запустить рендер")}</button>
               </div>
             )}
           </section>

@@ -52,7 +52,7 @@ pub fn detect_beats(ff: &Path, track: &str, offset: f64, dur: f64) -> Vec<f64> {
 // Секунды от offset — как у detect_beats.
 #[tauri::command]
 pub async fn track_beats(hlae: String, path: String, offset: f64, dur: f64) -> Result<Vec<f64>, String> {
-    let ff = Path::new(&hlae).parent().ok_or("неверный путь к HLAE")?.join("ffmpeg").join("bin").join("ffmpeg.exe");
+    let ff = crate::ffmpeg::find(&hlae).ok_or("не найден ffmpeg")?;
     Ok(detect_beats(&ff, &path, offset.max(0.0), dur))
 }
 
@@ -85,7 +85,7 @@ pub fn locate_hlae(current: String) -> Option<String> {
 // Название, исполнитель и длительность — из вывода ffmpeg (того, что лежит рядом с HLAE)
 #[tauri::command]
 pub async fn track_info(hlae: String, path: String) -> Result<TrackInfo, String> {
-    let ff = Path::new(&hlae).parent().ok_or("неверный путь к HLAE")?.join("ffmpeg").join("bin").join("ffmpeg.exe");
+    let ff = crate::ffmpeg::find(&hlae).ok_or("не найден ffmpeg")?;
     let mut cmd = Command::new(ff);
     cmd.args(["-hide_banner", "-i"]).arg(&path);
     crate::render::no_window(&mut cmd);
