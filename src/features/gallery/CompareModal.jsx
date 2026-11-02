@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-import { tr } from "./i18n";
+import { tr } from "../../i18n";
 // секунда готового клипа -> секунда сырой записи (обратно к отрезкам slow-mo из render.rs)
 function toIn(segs, t) {
   let acc = 0;

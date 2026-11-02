@@ -6,7 +6,7 @@ import { createPortal } from "react-dom";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 
-import { tr, trError, getLang, useLang } from "./i18n";
+import { tr, trError, getLang, useLang } from "../../i18n";
 const MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
 const SORTS = [["new", "Новые"], ["old", "Старые"], ["kills", "Больше киллов"], ["long", "Длиннее"], ["big", "Тяжелее"]];
 const KILLS = [["all", "Все"], [2, "2K"], [3, "3K"], [4, "4K"], [5, "ACE"]];

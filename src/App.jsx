@@ -1,5 +1,5 @@
 ﻿import { Component } from "react";
-import HighlightRenderer from "./HighlightRenderer";
+import HighlightRenderer from "./app/HighlightRenderer";
 import { tr, useLang } from "./i18n";
 
 // Если что-то в интерфейсе упало при отрисовке — вместо белого экрана показываем ошибку

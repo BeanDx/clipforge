@@ -3,10 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { parseName } from "./gallery";
+import { parseName } from "../../features/gallery/Gallery";
 import "./toast.css";
 
-import { tr, useLang } from "./i18n";
+import { tr, useLang } from "../../i18n";
 const LIFE = 10000;
 const fmtDur = (s) => (s ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : "");
 const kills = (k) => (k >= 5 ? tr("эйс") : k ? tr("{0} килла", k) : "");

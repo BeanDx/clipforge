@@ -2,8 +2,8 @@
 // по клику — список матчей, которые CS2 скачал в game\csgo\replays, открываются одним кликом.
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { mapName } from "./dossier";
-import { tr } from "./i18n";
+import { mapName } from "../features/match/dossier";
+import { tr } from "../i18n";
 
 const SEEN_KEY = "cf-replays-seen";
 const readSeen = () => { try { return Number(localStorage.getItem(SEEN_KEY)) || 0; } catch { return 0; } };

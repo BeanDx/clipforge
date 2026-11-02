@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 
-import { tr, trError } from "./i18n";
+import { tr, trError } from "../../i18n";
 const CATALOG_URL = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/skins.json";
 const KNIFE_CAT = "sfui_invpanel_filter_melee";
 const GLOVE_CAT = "sfui_invpanel_filter_gloves";

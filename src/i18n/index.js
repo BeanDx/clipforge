@@ -3,7 +3,7 @@
 // При первом запуске язык берётся из системы: русский — русский, любой другой — английский.
 // Выбор в «Настройках» запоминается и применяется сразу, без перезапуска.
 import { useSyncExternalStore } from "react";
-import EN from "./i18n.en";
+import EN from "./en";
 
 const KEY = "cf-lang";
 const listeners = new Set();

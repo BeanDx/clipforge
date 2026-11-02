@@ -8,11 +8,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
-import { tr, trError, useLang } from "./i18n";
-import { drawDust, drawTargets } from "./nightfx";
+import { tr, trError, useLang } from "../../i18n";
+import { drawDust, drawTargets } from "../edit/nightfx";
 import { alignLyrics } from "./lyricsAlign";
 import { LYRIC_STYLES, drawLyricStyle, lyricFont, lyricStyle, snapWords, wordsOf, heartWord } from "./lyricStyles";
-import previewBg from "./assets/previews/lyrics-bg.webp";
+import previewBg from "../../assets/previews/lyrics-bg.webp";
 export const MUSIC_DEFAULT = {
   enabled: false, path: "", title: "", artist: "", duration: 0,
   lrc: "", start: 0, musicVol: 0.8, gameVol: 0.35, showLyrics: true, chorusSlow: false, chorusOnKill: true,

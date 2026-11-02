@@ -1,7 +1,7 @@
 // Карточка игрока 1080×1920 (сторис / Discord): карта, счёт, итог и статистика из «Досье матча».
 import { mapName, mapTint } from "./dossier";
 
-import { tr } from "./i18n";
+import { tr } from "../../i18n";
 const W = 1080, H = 1920, PAD = 80;
 const C = { bg: "#07090d", line: "#1c2430", lineHi: "#2c3a4b", text: "#d6dde6", dim: "#6c7a8c", yellow: "#f5c518", teal: "#2ee6c0", red: "#e5484d" };
 const DISPLAY = '"Unbounded", sans-serif';

@@ -2,7 +2,7 @@
 // статистика, которую не показывает ни игра, ни обычный разбор (данные — scripts/info.cjs).
 import { useState } from "react";
 
-import { tr } from "./i18n";
+import { tr } from "../../i18n";
 const MAPS = {
   de_dust2: "Dust II", de_mirage: "Mirage", de_inferno: "Inferno", de_nuke: "Nuke", de_ancient: "Ancient",
   de_anubis: "Anubis", de_vertigo: "Vertigo", de_overpass: "Overpass", de_train: "Train", de_italy: "Italy", de_office: "Office",

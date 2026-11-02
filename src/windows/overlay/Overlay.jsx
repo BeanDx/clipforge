@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import "./overlay.css";
 
-import { tr, useLang } from "./i18n";
+import { tr, useLang } from "../../i18n";
 export default function Overlay() {
   useLang();
   const [s, setS] = useState(null);
