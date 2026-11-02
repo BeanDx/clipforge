@@ -16,6 +16,9 @@ export const LYRIC_STYLES = [
   { id: "accent", short: "одно слово крупно, акценты красным, под бит", label: "Акцент", font: '"Oswald"', weight: 700,
     screen: true, snap: true, multiply: true, extraFonts: ['800 40px "Rubik"'],
     help: "Как в TikTok-эдитах: по одному слову крупно в центре экрана. Слова сменяются ровно на ударах трека, буквы собираются вразнобой. Ударные слова огромные темно-красные и окрашивают саму карту, так что сквозь них видно текстуру: это весь припев и самое длинное слово каждой строки. Остальные слова белые, светятся и подсвечивают карту." },
+  { id: "night", short: "сиреневое свечение, сердце вокруг слова", label: "Night", font: '"Fredoka"', weight: 700,
+    extraFonts: ['700 40px "Nunito"'], inFrame: true,
+    help: "Как в ночных эдитах: крупные розово-сиреневые буквы со свечением выпрыгивают по одной и висят в мире, длинная строка встает в два ряда. Вокруг слова вроде «тебя» или «you» светящейся линией рисуется сердце с искрами. В конце строка блекнет и рассыпается." },
 ];
 export const lyricStyle = (id) => LYRIC_STYLES.find((s) => s.id === id) || LYRIC_STYLES[0];
 export const lyricFont = (id, px) => { const s = lyricStyle(id); return `${s.weight} ${px}px ${s.font}, "Segoe UI", sans-serif`; };
@@ -363,7 +366,171 @@ export function snapWords(words, beats) {
   });
 }
 
-const DRAW = { karaoke, world, neon, typewriter, glitch, accent };
+// ---- Night: как в ночных эдитах — розово-сиреневые буквы со свечением выпрыгивают по одной,
+// строка «висит» в мире в два ряда, вокруг ключевого слова светящейся линией рисуется сердце
+// с искрами. В конце строка блекнет до полупрозрачной и рассыпается. ----
+const NIGHT_FONT = (px) => `700 ${px}px "Fredoka", "Nunito", "Segoe UI", sans-serif`;
+const NIGHT_GLOW = "#d63bff";
+
+// строка -> ряды: длинная (3+ слова) делится на два, нижний крупнее (как «IF I / GET YOU»)
+function nightRows(words) {
+  if (words.length < 3) return [{ words, scale: 1 }];
+  const cut = Math.max(1, Math.round(words.length * 0.42));
+  return [{ words: words.slice(0, cut), scale: 0.86 }, { words: words.slice(cut), scale: 1.12 }];
+}
+
+// точки сердца (параметрическое) от нижнего острия по часовой: [x, y] в долях ширины/высоты
+const HEART = Array.from({ length: 90 }, (_, i) => {
+  const a = Math.PI + (i / 89) * Math.PI * 2;
+  const x = 16 * Math.pow(Math.sin(a), 3);
+  const y = -(13 * Math.cos(a) - 5 * Math.cos(2 * a) - 2 * Math.cos(3 * a) - Math.cos(4 * a));
+  return [x / 34, y / 30];
+});
+
+// путь пера: росчерк приходит справа снизу и переходит в сердце вокруг слова
+function heartPath(cx, cy, w, h) {
+  const pts = [];
+  const tip = [cx + HEART[0][0] * w, cy + HEART[0][1] * h + h * 0.06];
+  for (let i = 0; i <= 24; i++) {
+    const u = i / 24;
+    pts.push([tip[0] + (1 - u) * w * 2.3, tip[1] + (1 - u) * h * 0.18 - Math.sin(u * Math.PI) * h * 0.08]);
+  }
+  for (const [x, y] of HEART) pts.push([cx + x * w, cy + y * h + h * 0.06]);
+  let len = 0;
+  const acc = pts.map((p, i) => (i ? (len += Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1])) : 0));
+  return { pts, acc, len };
+}
+
+function drawHeart(ctx, { cx, cy, w, h, u, k, alpha, seed, t }) {
+  const { pts, acc, len } = heartPath(cx, cy, w, h);
+  const T = 24; // точки 0..T — росчерк, дальше — само сердце
+  const upto = len * u;
+  let tip = pts[0];
+  // ломаная от точки from до пройденной пером длины upto
+  const path = (from, to) => {
+    ctx.beginPath();
+    ctx.moveTo(pts[from][0], pts[from][1]);
+    for (let i = from + 1; i <= to && acc[i - 1] < upto; i++) {
+      let [x, y] = pts[i];
+      if (acc[i] > upto) {
+        const f = (upto - acc[i - 1]) / (acc[i] - acc[i - 1]);
+        x = pts[i - 1][0] + (x - pts[i - 1][0]) * f; y = pts[i - 1][1] + (y - pts[i - 1][1]) * f;
+      }
+      ctx.lineTo(x, y);
+      tip = [x, y];
+    }
+  };
+  const glowLine = (glow, core) => {
+    ctx.lineWidth = h * 0.075; ctx.strokeStyle = glow; ctx.shadowColor = NIGHT_GLOW; ctx.shadowBlur = 34 * k; ctx.stroke();
+    ctx.lineWidth = h * 0.034; ctx.strokeStyle = core; ctx.shadowBlur = 12 * k; ctx.stroke();
+  };
+  ctx.save();
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.globalAlpha = alpha;
+  // росчерк: тает от начала к сердцу, а когда сердце дорисовано — гаснет целиком
+  const done = clamp01((upto - acc[T]) / (len - acc[T]));
+  const tailA = 1 - done;
+  if (tailA > 0) {
+    const g1 = ctx.createLinearGradient(pts[0][0], pts[0][1], pts[T][0], pts[T][1]);
+    g1.addColorStop(0, "rgba(226,90,255,0)"); g1.addColorStop(1, `rgba(226,90,255,${0.9 * tailA})`);
+    const g2 = ctx.createLinearGradient(pts[0][0], pts[0][1], pts[T][0], pts[T][1]);
+    g2.addColorStop(0, "rgba(255,227,253,0)"); g2.addColorStop(1, `rgba(255,227,253,${tailA})`);
+    path(0, T);
+    glowLine(g1, g2);
+  }
+  if (upto > acc[T]) { path(T, pts.length - 1); glowLine("rgba(226,90,255,.9)", "#ffe3fd"); }
+  else path(0, T);
+  // искры летят от пера
+  ctx.globalCompositeOperation = "lighter";
+  if (u < 1) for (let s = 0; s < 16; s++) {
+    const f = Math.floor(t * 30);
+    const ang = rnd(seed + s * 3 + f) * Math.PI * 2;
+    const r = rnd(seed + s * 5 + f + 1) * h * 0.5;
+    const x = tip[0] + Math.cos(ang) * r, y = tip[1] + Math.sin(ang) * r * 0.7 + r * 0.3;
+    ctx.globalAlpha = alpha * (1 - r / (h * 0.5));
+    ctx.fillStyle = s % 3 ? "#f6a8ff" : "#ffffff";
+    ctx.shadowColor = NIGHT_GLOW; ctx.shadowBlur = 8 * k;
+    const sz = (1.2 + rnd(seed + s) * 2.4) * k;
+    ctx.fillRect(x - sz / 2, y - sz / 2, sz, sz);
+  }
+  ctx.restore();
+}
+
+function night(ctx, { p, t, size, k, pi, sc, words, maxW = size * 30 }) {
+  const fs0 = size * 3.1;
+  const up = words.map((w) => ({ ...w, w: w.w.toUpperCase() }));
+  const rows = nightRows(up);
+  // длинная строка уменьшается, чтобы целиком влезть примерно в две трети кадра
+  const widest = Math.max(...rows.map((row) => {
+    ctx.font = NIGHT_FONT(fs0 * row.scale);
+    return row.words.reduce((s, w) => s + ctx.measureText(w.w).width, 0) + fs0 * row.scale * 0.26 * (row.words.length - 1) + fs0 * 0.8;
+  }));
+  const fit = Math.min(1, (maxW * 0.62) / Math.max(1, widest));
+  ctx.scale(fit, fit);
+  // выход: строка блекнет до призрачной, потом буквы гаснут вразнобой
+  const ghost = clamp01(sc / 0.45);
+  let y = -((rows.length - 1) * fs0 * 0.55);
+  rows.forEach((row, ri) => {
+    const fs = fs0 * row.scale;
+    ctx.font = NIGHT_FONT(fs);
+    const L = layout(ctx, row.words, fs * 0.26);
+    // ряды чуть сдвинуты: верхний левее, нижний правее
+    const rx = rows.length > 1 ? (ri ? fs0 * 0.35 : -fs0 * 0.45) : 0;
+    L.words.forEach((wd, wi) => {
+      wd.letters.forEach((l, c) => {
+        const seed = pi * 1013 + ri * 211 + wi * 67 + c * 23;
+        const e = t - l.at;
+        if (e < 0) return;
+        const pop = clamp01(e / 0.17);
+        const out = clamp01((sc - 0.45 - rnd(seed + 9) * 0.3) / 0.25);
+        const a = clamp01(e / 0.05) * (1 - ghost * 0.62) * (1 - out);
+        if (a <= 0) return;
+        const rest = (rnd(seed) - 0.5) * 0.13;
+        const s = (0.93 + rnd(seed + 1) * 0.15) * (pop < 1 ? easeOutBack(pop) : 1);
+        ctx.save();
+        ctx.translate(rx + l.x + l.cw / 2, y + (rnd(seed + 2) - 0.5) * fs * 0.07 + (1 - pop) * fs * 0.35 - out * fs * 0.3);
+        ctx.rotate(rest + (1 - pop) * (rnd(seed + 3) - 0.5) * 0.9);
+        ctx.scale(s, s);
+        ctx.globalAlpha = a;
+        // свежая буква вспыхивает
+        const flash = 1 - clamp01(e / 0.22);
+        const g = ctx.createLinearGradient(0, -fs * 0.4, 0, fs * 0.4);
+        g.addColorStop(0, "#ffe8fc"); g.addColorStop(1, "#eba8f1");
+        ctx.shadowColor = NIGHT_GLOW;
+        ctx.shadowBlur = (30 + flash * 30) * k * (1 - ghost * 0.8);
+        ctx.fillStyle = g;
+        ctx.fillText(l.ch, -l.cw / 2, 0);
+        ctx.shadowBlur = (10 + flash * 14) * k * (1 - ghost);
+        ctx.fillText(l.ch, -l.cw / 2, 0);
+        if (flash > 0) {
+          ctx.globalAlpha = a * flash;
+          ctx.fillStyle = "#ffffff";
+          ctx.fillText(l.ch, -l.cw / 2, 0);
+        }
+        ctx.restore();
+      });
+      // сердце вокруг ключевого слова
+      if (p.heart != null && up.indexOf(row.words[wi]) === p.heart && t > wd.ws + 0.08) {
+        const u = clamp01((t - wd.ws - 0.08) / 0.75);
+        drawHeart(ctx, {
+          cx: rx + wd.x + wd.ww / 2, cy: y - fs * 0.12, w: Math.max(wd.ww * 1.38, fs * 1.9), h: fs * 2.15,
+          u: 1 - Math.pow(1 - u, 2), k, alpha: 1 - clamp01(sc / 0.6), seed: pi * 37, t,
+        });
+      }
+    });
+    y += fs0 * 1.1;
+  });
+}
+
+// слово для сердца: «любовное» слово строки, иначе последнее слово (если строка помечена heart)
+const HEART_WORDS = /^(you|love|heart|baby|ты|тебя|тобой|тебе|люблю|любовь|сердце|моя|мой)$/i;
+export function heartWord(text) {
+  const ws = text.split(/\s+/).filter(Boolean);
+  const i = ws.findIndex((w) => HEART_WORDS.test(w.replace(/[^\p{L}]/gu, "")));
+  return i;
+}
+
+const DRAW = { karaoke, world, neon, typewriter, glitch, accent, night };
 
 // Рисует кусок строки стилем style в уже настроенной системе координат (центр строки — 0, 0)
 export function drawLyricStyle(ctx, style, args) {
