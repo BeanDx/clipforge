@@ -93,7 +93,7 @@ const SOURCES: [&str; 2] = [
     "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip",
 ];
 
-fn download(url: &str, dst: &Path, on: &dyn Fn(f64, f64)) -> Result<(), String> {
+pub(crate) fn download(url: &str, dst: &Path, on: &dyn Fn(f64, f64)) -> Result<(), String> {
     let mut resp = ureq::get(url).call().map_err(|e| e.to_string())?;
     let total: u64 = resp.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok()).unwrap_or(0);
     let mut body = resp.body_mut().with_config().limit(1 << 31).reader();
@@ -151,6 +151,13 @@ fn fetch(dir: &Path, on: &dyn Fn(f64, f64)) -> Result<PathBuf, String> {
 pub async fn ensure_ffmpeg(app: AppHandle, hlae: String) -> Result<String, String> {
     if let Some(p) = find(&hlae) { return Ok(p.to_string_lossy().into_owned()); }
     let on = |done: f64, total: f64| { let _ = app.emit("ffmpeg-progress", (done, total)); };
-    fetch(&own_dir(), &on).map(|p| p.to_string_lossy().into_owned())
+    // HLAE, который программа скачала сама, лежит в папке пользователя — ffmpeg кладём прямо ему
+    // в ffmpeg\bin, там HLAE находит его без подсказки; иначе — в свою папку
+    let dir = match hlae_dir(&hlae) {
+        Some(d) if d == crate::hlae::own_dir() => d.join("ffmpeg").join("bin"),
+        _ => own_dir(),
+    };
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    fetch(&dir, &on).map(|p| p.to_string_lossy().into_owned())
 }
 

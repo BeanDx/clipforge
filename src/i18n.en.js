@@ -615,5 +615,6 @@ export default {
   "Продолжить сборку": "Continue build",
   "Повторить": "Retry",
   "скачиваю ffmpeg...": "downloading ffmpeg...",
+  "скачиваю HLAE (движок записи): {0} / {1} МБ": "downloading HLAE (recording engine): {0} / {1} MB",
   "скачиваю ffmpeg для записи: {0} / {1} МБ": "downloading ffmpeg for recording: {0} / {1} MB",
 };

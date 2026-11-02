@@ -345,13 +345,24 @@ export default function HighlightRenderer() {
   const [paths, setPaths] = useState(() => JSON.parse(localStorage.getItem("cf-paths") || "null") || DEFAULT_PATHS);
   useEffect(() => localStorage.setItem("cf-paths", JSON.stringify(paths)), [paths]);
 
-  // Если HLAE по указанному пути нет (например, настройки сбросились), ищем его в стандартных местах:
-  // от него зависят ffmpeg (трек, склейка) и поиск GPU-кодировщика
-  useEffect(() => {
-    invoke("locate_hlae", { current: paths.hlae })
-      .then((found) => { if (found && found !== paths.hlae) setPaths((p) => ({ ...p, hlae: found })); })
-      .catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Если HLAE по указанному пути нет (например, настройки сбросились), ищем его в стандартных местах,
+  // а не нашли — скачиваем официальную zip-версию (src-tauri/src/hlae.rs): ставить HLAE вручную не нужно.
+  // От него зависят запись, ffmpeg (трек, склейка) и поиск GPU-кодировщика.
+  const [hlaeReady, setHlaeReady] = useState(false);
+  const [hlLoad, setHlLoad] = useState(null); // [скачано, всего] МБ, пока качается
+  const [hlErr, setHlErr] = useState("");
+  const ensureHlae = useCallback(async () => {
+    setHlErr("");
+    const un = await listen("hlae-progress", (e) => setHlLoad(e.payload));
+    try {
+      const found = await invoke("ensure_hlae", { current: paths.hlae });
+      setPaths((p) => (p.hlae === found ? p : { ...p, hlae: found }));
+      setHlaeReady(true);
+      return found;
+    } catch (e) { setHlErr(String(e)); throw e; }
+    finally { un(); setHlLoad(null); }
+  }, [paths.hlae]);
+  useEffect(() => { ensureHlae().catch(() => {}); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Папка клипов по умолчанию — «Видео»\clipforge. Старый дефолт (Public\Videos) тоже заменяем.
   const [defaultOut, setDefaultOut] = useState("");
@@ -486,7 +497,8 @@ export default function HighlightRenderer() {
     } catch (e) { setFfErr(String(e)); throw e; }
     finally { un(); setFfLoad(null); }
   }, [paths.hlae]);
-  useEffect(() => { if (paths.hlae) ensureFfmpeg().catch(() => {}); }, [ensureFfmpeg, paths.hlae]);
+  // ffmpeg ищем только когда HLAE уже на месте: его ffmpeg.ini и папка bin — первые места поиска
+  useEffect(() => { if (hlaeReady && paths.hlae) ensureFfmpeg().catch(() => {}); }, [ensureFfmpeg, hlaeReady, paths.hlae]);
 
   // Аппаратный кодировщик ищем в том же ffmpeg: null — нет, undefined — ещё проверяем.
   const [gpuEnc, setGpuEnc] = useState(undefined);
@@ -899,22 +911,26 @@ const voicePayload = useMemo(() => {
         <LiveStatus cs2={paths.cs2} rendering={rendering} progress={progress} archiveCount={archive.length}
           onOpen={(path) => { setTab(0); loadPath(path); }} />
       </nav>
-      {/* ffmpeg качается сам, если его нет рядом с HLAE: показываем, сколько осталось, или ошибку с повтором */}
-      {(ffLoad || ffErr) && (
-        <div className={`ff-bar ${ffErr ? "is-err" : ""}`} role="status">
-          {ffLoad ? (
-            <>
-              <span className="mono">{tr("скачиваю ffmpeg для записи: {0} / {1} МБ", Math.round(ffLoad[0]), ffLoad[1] ? Math.round(ffLoad[1]) : "?")}</span>
-              <span className="ff-bar__track"><i style={{ width: ffLoad[1] ? `${(ffLoad[0] / ffLoad[1]) * 100}%` : "30%" }} /></span>
-            </>
-          ) : (
-            <>
-              <span className="mono">{trError(ffErr)}</span>
-              <button type="button" className="chip" onClick={() => ensureFfmpeg().catch(() => {})}>{tr("Повторить")}</button>
-            </>
-          )}
-        </div>
-      )}
+      {/* HLAE и ffmpeg качаются сами, если их нет: показываем, сколько осталось, или ошибку с повтором */}
+      {(hlLoad || hlErr || ffLoad || ffErr) && (() => {
+        const load = hlLoad || ffLoad, err = hlErr || ffErr;
+        const label = hlLoad ? "скачиваю HLAE (движок записи): {0} / {1} МБ" : "скачиваю ffmpeg для записи: {0} / {1} МБ";
+        return (
+          <div className={`ff-bar ${!load && err ? "is-err" : ""}`} role="status">
+            {load ? (
+              <>
+                <span className="mono">{tr(label, Math.round(load[0]), load[1] ? Math.round(load[1]) : "?")}</span>
+                <span className="ff-bar__track"><i style={{ width: load[1] ? `${(load[0] / load[1]) * 100}%` : "30%" }} /></span>
+              </>
+            ) : (
+              <>
+                <span className="mono">{trError(err)}</span>
+                <button type="button" className="chip" onClick={() => (hlErr ? ensureHlae() : ensureFfmpeg()).catch(() => {})}>{tr("Повторить")}</button>
+              </>
+            )}
+          </div>
+        );
+      })()}
 
       {tab === EDIT_TAB ? (
         <main className="grid" key={tab}>
