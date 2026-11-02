@@ -51,6 +51,12 @@ pub struct Clip {
     // ночной вид (пресет Night): звёздное небо вместо дневного, ночной цвет, светящееся оружие в руках
     #[serde(default)]
     pub night: bool,
+    // чистый кадр без HUD (интро эдита, как в TikTok-эдитах)
+    #[serde(default)]
+    pub clean: bool,
+    // демка клипа, если в задании их несколько (эдит): игра переходит к следующей сама, без перезапуска
+    #[serde(default)]
+    pub demo: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -771,13 +777,23 @@ fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, Str
 
     let head = std::mem::take(&mut c);
     // Дальше — clipforge_run.cfg, он выполняется по F10 уже внутри загруженной демки.
-    c += &format!("spec_show_xray {}\n", j.xray as u8);
+    // Настройки, которые нужны после загрузки каждой демки (следующие демки задания игра
+    // открывает сама — см. cf_<i>_load ниже)
+    let mut per_demo = format!("spec_show_xray {}\n", j.xray as u8);
     // для своего HUD игровой тоже прячем — остаётся килфид, остальное рисуется поверх видео
-    c += &format!("cl_draw_only_deathnotices {}\n", (j.hud == "killfeed" || j.hud == "match") as u8);
+    per_demo += &format!("cl_draw_only_deathnotices {}\n", (j.hud == "killfeed" || j.hud == "match") as u8);
     // demoui — переключатель: панель открыта при старте демки, одна команда её закрывает.
-    if j.hide_demo_ui { c += "demoui\n"; }
+    if j.hide_demo_ui { per_demo += "demoui\n"; }
     // карта уже загружена — mirv_sky для облаков нужно применять после загрузки
-    if j.atmo_game { c += &atmo_cmds(&j.atmo); }
+    if j.atmo_game { per_demo += &atmo_cmds(&j.atmo); }
+    c += &per_demo;
+    // Несколько демок в одном задании (эдит): клипы идут подряд по демкам. Конец последнего клипа
+    // демки очищает расписание, ставит расписание клипов следующей и сам открывает её (playdemo) —
+    // CS2 не перезапускается, F10 нужен только в первой демке. mirv_cmd переживает смену демки.
+    let n = j.clips.len();
+    let demo_of = |i: usize| j.clips[i].demo.as_deref().unwrap_or(&j.demo);
+    // индекс после последнего клипа той же демки
+    let group_end = |i: usize| (i..n).find(|&k| k + 1 >= n || demo_of(k + 1) != demo_of(i)).map_or(n, |k| k + 1);
     let mut files: Vec<(String, String)> = Vec::new();
     // расписание каждого клипа отдельно: повтор от лица убитого очищает расписание (mirv_cmd clear),
     // чтобы отмотка назад не запустила команды клипа ещё раз, а потом восстанавливает остальные клипы
@@ -785,20 +801,29 @@ fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, Str
     let mut marks: HashSet<u32> = HashSet::new();
     for (i, cl) in j.clips.iter().enumerate() {
         let mut c = String::new();
-        let sky_on = if cl.night { format!("mirv_sky material \"{}\"\n", crate::sky::SKY_MATERIAL) } else { String::new() };
+        let mut sky_on = if cl.night { format!("mirv_sky material \"{}\"\n", crate::sky::SKY_MATERIAL) } else { String::new() };
+        // HUD — явно в начале каждого клипа: CS2 помнит эти настройки между запусками, и после
+        // чистого интро (или прошлого рендера с другим режимом) у части демок HUD пропадал
+        sky_on += &format!("cl_drawhud {}\ncl_draw_only_deathnotices {}\n", (!cl.clean) as u8, (j.hud == "killfeed" || j.hud == "match") as u8);
         files.push((
             format!("cf_{}_s", i),
             format!("{sky_on}spec_player {}\nmirv_streams record start\n", cl.slot),
         ));
         let mut end = String::from("mirv_streams record end\n");
         if cl.night { end += "mirv_sky material default\n"; }
+        end += "cl_drawhud 1\n";
         let reps = replays(cl);
-        if !reps.is_empty() {
+        let last_in_demo = group_end(i) == i + 1;
+        if !reps.is_empty() && !last_in_demo {
             // после повтора возвращаем расписание оставшихся клипов
             end += &format!("exec cf_{i}_rest\n");
         }
         if let Some(nx) = j.clips.get(i + 1) {
-            end += &format!("demo_gototick {}\n", nx.start.saturating_sub(64));
+            if last_in_demo {
+                end += &format!("mirv_cmd clear\nexec cf_{}_load\nplaydemo \"{}\"\n", i + 1, demo_of(i + 1).replace('\\', "/"));
+            } else {
+                end += &format!("demo_gototick {}\n", nx.start.saturating_sub(64));
+            }
         }
         files.push((format!("cf_{}_e", i), end));
         c += &format!("mirv_cmd addAtTick {} \"exec cf_{}_s\"\n", cl.start, i);
@@ -842,12 +867,20 @@ fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, Str
     }
     // для каждого клипа — расписание всех следующих (восстанавливается после повтора)
     for i in 0..sched.len() {
-        if !replays(&j.clips[i]).is_empty() {
-            files.push((format!("cf_{i}_rest"), sched[i + 1..].concat()));
+        if !replays(&j.clips[i]).is_empty() && group_end(i) > i + 1 {
+            files.push((format!("cf_{i}_rest"), sched[i + 1..group_end(i)].concat()));
+        }
+        // первый клип следующей демки: её расписание и, когда демка начнёт играть, настройки и
+        // перемотка к клипу (сразу после playdemo перематывать ещё нечего)
+        if i > 0 && demo_of(i) != demo_of(i - 1) {
+            let mut go = per_demo.clone();
+            if j.clips[i].start > 200 { go += &format!("demo_gototick {}\n", j.clips[i].start - 64); }
+            files.push((format!("cf_{i}_go"), go));
+            files.push((format!("cf_{i}_load"), format!("{}mirv_cmd addAtTick 96 \"exec cf_{i}_go\"\n", sched[i..group_end(i)].concat())));
         }
     }
-    // сначала расписание, потом перемотка к первому клипу
-    c += &sched.concat();
+    // сначала расписание первой демки, потом перемотка к первому клипу
+    if n > 0 { c += &sched[..group_end(0)].concat(); }
     if let Some(f) = j.clips.first() {
         c += &format!("demo_gototick {}\n", f.start.saturating_sub(64));
     }
@@ -922,6 +955,8 @@ fn recorded_fraction(clips: &[Clip], tick: Option<u32>, takes_done: usize) -> f6
     let done: u64 = clips.iter().enumerate().map(|(i, c)| {
         let len = c.end.saturating_sub(c.start) as u64;
         if i < takes_done.saturating_sub(1) { return len; } // уже есть следующая запись — этот дописан
+        // дальше текущего не считаем: у клипов другой демки те же тики
+        if i > takes_done.saturating_sub(1) { return 0; }
         match tick {
             Some(t) if t >= c.end => len,
             Some(t) if t >= c.start => (t - c.start) as u64,
@@ -1360,7 +1395,7 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
                 handled.insert(d.clone());
                 let clip = job.clips.get(i).cloned().unwrap_or_else(|| Clip {
                     account_id: 0, name: String::new(), round: 0, start: 0, end: 0, slot: 1,
-                    kill_ticks: vec![], hits: vec![], drops: vec![], music_start: None, cine: None, hs_ticks: vec![], music_fade_in: None, music_fade_out: None, night: false,
+                    kill_ticks: vec![], hits: vec![], drops: vec![], music_start: None, cine: None, hs_ticks: vec![], music_fade_in: None, music_fade_out: None, night: false, clean: false, demo: None,
                 });
                 // "2026-10-30 15-40-12 R05 3K.mp4" — сортируется по времени, как остальные видео в папке
                 let dst = match &job.parts_dir {

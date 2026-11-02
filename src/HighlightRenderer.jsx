@@ -540,11 +540,23 @@ export default function HighlightRenderer() {
   const appRef = useRef(null);
   useInteractionFx(appRef);
 
+  // Ошибка разбора демки — понятным текстом: MalformedMessage и обрыв данных значат битый или недокачанный файл
+  const demoError = (path, e) => {
+    const msg = String(e?.message || e);
+    const file = String(path || "").split(/[\\/]/).pop();
+    return /malformed|unexpected end|eof|truncat/i.test(msg)
+      ? tr("{0}: файл демки поврежден или недокачан ({1}). Скачай его заново.", file, msg)
+      : `${file}: ${msg}`;
+  };
+  // номер последней загрузки: если пока разбиралась одна демка, открыли другую, ответ первой не нужен
+  const loadReq = useRef(0);
   const loadPath = useCallback(async (path) => {
     if (!path?.toLowerCase().endsWith(".dem")) return;
+    const req = ++loadReq.current;
     setError(""); setParsing(true);
     try {
       const raw = JSON.parse(await invoke("parse_demo", { path }));
+      if (req !== loadReq.current) return;
       const r = parseDemo(raw, 64, pad.before, pad.after);
       setDemo({ path, name: path.split(/[\\/]/).pop(), size: raw.size });
       setClips(r.clips); setPlayers(r.players); setMaxRound(r.maxRound); setRoster(r.roster); setHurts(r.hurts);
@@ -562,9 +574,45 @@ export default function HighlightRenderer() {
         return [entry, ...list.filter((d) => d.path !== path)];
       });
       loadInfo(path);
-    } catch (e) { setError(String(e)); }
-    setParsing(false);
-  }, [pad]);
+    } catch (e) { if (req === loadReq.current) setError(demoError(path, e)); }
+    if (req === loadReq.current) setParsing(false);
+  }, [pad]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Пачка демок сразу (выбор нескольких файлов или перетаскивание): каждая разбирается и попадает
+  // в архив — оттуда её можно открыть или взять в «Эдит». Битые пропускаются со своей причиной.
+  // Одна демка — открывается как раньше.
+  const [importing, setImporting] = useState(null); // { i, n, file } пока идёт
+  const [importMsg, setImportMsg] = useState(null); // { added, bad: [текст ошибки] }
+  const importDemos = useCallback(async (paths) => {
+    const list = [...new Set((paths || []).filter((x) => x?.toLowerCase().endsWith(".dem")))];
+    if (list.length <= 1) return loadPath(list[0]);
+    setImportMsg(null);
+    const bad = [];
+    let added = 0;
+    for (let i = 0; i < list.length; i++) {
+      const path = list[i];
+      const file = path.split(/[\\/]/).pop();
+      setImporting({ i: i + 1, n: list.length, file });
+      try {
+        const raw = JSON.parse(await invoke("parse_demo", { path }));
+        const r = parseDemo(raw, 64, pad.before, pad.after);
+        const map = await invoke("demo_header", { path }).catch(() => "");
+        setArchive((arc) => {
+          const prev = arc.find((d) => d.path === path);
+          const entry = {
+            path, file, title: prev?.title ?? "", size: raw.size, clips: r.clips.length,
+            info: prev?.info ?? (map ? { map } : undefined),
+            addedAt: prev?.addedAt ?? Date.now(), openedAt: prev?.openedAt,
+          };
+          return [entry, ...arc.filter((d) => d.path !== path)];
+        });
+        added++;
+      } catch (e) { bad.push(demoError(path, e)); }
+    }
+    setImporting(null);
+    setImportMsg({ added, bad });
+    setTab(ARCHIVE_TAB);
+  }, [loadPath, pad]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openFromArchive = (path) => { setTab(DEMO_TAB); loadPath(path); };
   const renameDemo = (path, title) =>
@@ -576,13 +624,17 @@ export default function HighlightRenderer() {
     const un = getCurrentWebview().onDragDropEvent((e) => {
       const t = e.payload.type;
       if (t === "over" || t === "enter") setOver(true);
-      else if (t === "drop") { setOver(false); loadPath(e.payload.paths?.[0]); }
+      else if (t === "drop") { setOver(false); importDemos(e.payload.paths); }
       else setOver(false);
     });
     return () => { un.then((f) => f()); };
-  }, [loadPath]);
+  }, [importDemos]);
 
-  const pickFile = async () => loadPath(await openDialog({ filters: [{ name: "CS2 demo", extensions: ["dem"] }] }));
+  // можно выбрать сразу несколько демок (Ctrl/Shift): тогда все уйдут в архив
+  const pickFile = async () => {
+    const f = await openDialog({ multiple: true, filters: [{ name: "CS2 demo", extensions: ["dem"] }] });
+    importDemos(Array.isArray(f) ? f : f ? [f] : []);
+  };
 
   const myClips = useMemo(() => clips.filter((c) => c.steamid === playerId), [clips, playerId]);
   // карточка игрока (src/card.js): превью в окне, сохранить PNG или скопировать в буфер для Discord
@@ -693,6 +745,7 @@ const voicePayload = useMemo(() => {
 
   // reuse — «Пересобрать без игры»: эффекты заново на сырой записи прошлого рендера.
   // o — кусок монтажа (вкладка «Эдит»): своя демка, игрок и клипы { demoPath, steamid, roster, clips, partsDir };
+  // у клипов может быть своя демка (c.demo) — тогда все демки пишутся за один запуск CS2;
   // у клипов с night — ночной вид, пыль, рамка на цели и текст песни (без самого трека: он ляжет при монтаже).
   // Возвращает промис, который ждёт конца рендера (render-done).
   const startRender = async (reuse = false, o = null) => {
@@ -703,7 +756,9 @@ const voicePayload = useMemo(() => {
     const demoPath0 = o?.demoPath ?? demo.path;
     const pid = o?.steamid ?? playerId;
     const ros = o?.roster ?? roster;
-    const fxJob = o ? { ...fx, slowmo: false, camVictim: false, camOrbit: false, hsZoom: false, killFlash: false, atmo: "" } : fx;
+    // кусок эдита: HUD всегда полный (как в TikTok-эдитах), без своих повторов и замедлений —
+    // ритм делает монтаж
+    const fxJob = o ? { ...fx, slowmo: false, camVictim: false, camOrbit: false, hsZoom: false, killFlash: false, atmo: "", hud: "full", xray: false } : fx;
     const { width, height, crf } = res;
     const sel = o ? o.clips : myClips
       .filter((c) => picked.has(c.round))
@@ -803,9 +858,16 @@ const voicePayload = useMemo(() => {
         // куда смотрела камера на каждом тике клипов — текст «закрепляется» в мире;
         // для ночных клипов ещё глаз игрока и жертвы перед киллами (рамка на цели)
         const victims = nightOn ? JSON.stringify(sel.map((c) => (c.night ? (c.rawTicks || c.killTicks || []).map((t, j) => [c.victims?.[j], t]).filter(([v]) => v) : []))) : null;
-        const camData = JSON.parse(await invoke("parse_cam", {
-          path: demoPath0, steamid: pid, ranges: JSON.stringify(sel.map((c) => [c.start, c.end])), victims,
-        }));
+        // в эдите клипы из разных демок (c.demo) — камеру читаем из каждой демки для её клипов
+        const camData = new Array(sel.length);
+        for (const dp of new Set(sel.map((c) => c.demo || demoPath0))) {
+          const idx = sel.map((c, i) => ((c.demo || demoPath0) === dp ? i : -1)).filter((i) => i >= 0);
+          const vs = victims && JSON.stringify(idx.map((i) => JSON.parse(victims)[i]));
+          const got = JSON.parse(await invoke("parse_cam", {
+            path: dp, steamid: pid, ranges: JSON.stringify(idx.map((i) => [sel[i].start, sel[i].end])), victims: vs,
+          }));
+          idx.forEach((i, k) => { camData[i] = got[k]; });
+        }
         const cams = camData.map((d) => (Array.isArray(d) ? d : d.cam));
         const work = await join(paths.out, ".clipforge_tmp", stamp);
         for (let i = 0; i < sel.length; i++) {
@@ -821,15 +883,20 @@ const voicePayload = useMemo(() => {
             : [];
           const nd = sel[i].night && !Array.isArray(camData[i]) ? camData[i] : null;
           const list = await renderLyricFrames({
-            lrc: lyricsOn ? music.lrc : "", start: sel[i].musicStart ?? music.start, clip: sel[i], cam: cams[i] || [], slowmo: fxJob.slowmo, drops: sel[i].drops || [], fov, fps,
+            // в эдите текст в самом куске — только у интро и только со стилем Night (в мире); «Акцент»
+            // ложится поверх всего эдита при склейке, а у ночных кусков остаются пыль и рамка
+            lrc: lyricsOn && (!o || (o.partLyrics && sel[i].clean)) ? music.lrc : "",
+            start: sel[i].musicStart ?? music.start, clip: sel[i], cam: cams[i] || [], slowmo: fxJob.slowmo, drops: sel[i].drops || [], fov, fps,
             W: width, H: height, save, style: o ? "night" : music.lyricStyle, beats, smart: o ? false : music.smartLyrics !== false,
             night: nd ? { dust: true, eye: nd.eye, targets: nd.targets } : null,
             onFrame: (f, n) => { stopped(); setStage(tr("текст песни: клип {0}/{1} · {2}%", i + 1, sel.length, Math.round((f / n) * 100))); },
           });
           await save("lyrics.ffconcat", new TextEncoder().encode(list));
           // звёздное небо — настоящий скайбокс игры (sky.rs, mirv_sky material). Луна встаёт чуть левее
-          // того, куда игрок смотрит в начале интро, чтобы сразу была в кадре
-          if (sel[i].night) {
+          // того, куда игрок смотрит в начале интро, чтобы сразу была в кадре. Материал один на всю
+          // запись демки — ставим его по первому ночному клипу (интро, если оно в этой демке)
+          const firstNight = sel.findIndex((c) => c.night && c.clean) >= 0 ? sel.findIndex((c) => c.night && c.clean) : sel.findIndex((c) => c.night);
+          if (sel[i].night && i === firstNight) {
             setStage(tr("ночное небо: клип {0}/{1}", i + 1, sel.length));
             const yaw0 = cams[i]?.[0]?.[2] ?? 0;
             const sky = buildSkyEquirect(skyAzOfYaw(yaw0 + 14));
@@ -935,7 +1002,7 @@ const voicePayload = useMemo(() => {
       {tab === EDIT_TAB ? (
         <main className="grid" key={tab}>
           <NightEdit Frame={Frame} Hint={Hint} archive={archive} cs2={paths.cs2} hlae={paths.hlae} out={paths.out}
-            music={music} playerId={playerId} rendering={rendering} progress={progress} stage={stage}
+            music={music} setMusic={setMusic} playerId={playerId} rendering={rendering} progress={progress} stage={stage}
             video={{
               fps, height: res.height, crf: res.crf, gpu: useGpu && gpuEnc ? gpuEnc : null,
               // куски 4:3 уже растянуты до 16:9 той же высоты (как в render.rs) — эдит того же размера
@@ -952,6 +1019,22 @@ const voicePayload = useMemo(() => {
       ) : tab === ARCHIVE_TAB ? (
         <main className="grid" key={tab}>
           <Frame title={tr("Архив демок")} meta={tr("{0} файлов", archive.length)} className="span-2">
+            <div className="arc-add">
+              <button type="button" className="chip" disabled={!!importing} onClick={pickFile}>{tr("+ добавить демки")}</button>
+              <span className="mono dim">{tr("можно выбрать сразу несколько или перетащить пачку в окно")}</span>
+            </div>
+            {importing && (
+              <div className="arc-import">
+                <span className="mono accent pulse">{tr("добавляю {0}/{1}: {2}", importing.i, importing.n, importing.file)}</span>
+                <span className="ff-bar__track"><i style={{ width: `${(importing.i / importing.n) * 100}%` }} /></span>
+              </div>
+            )}
+            {importMsg && (
+              <div className="arc-msg">
+                <b>{tr("Добавлено в архив: {0}", importMsg.added)}</b>
+                {importMsg.bad.map((b) => <span key={b} className="err">{b}</span>)}
+              </div>
+            )}
             {archive.length === 0 ? (
               <p className="empty dim">{tr("Здесь появятся все демки, которые ты когда-либо открывал.")}</p>
             ) : (

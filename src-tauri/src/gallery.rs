@@ -158,3 +158,39 @@ pub fn open_replays(cs2: String) -> Result<(), String> {
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Command::new("explorer").arg(dir).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
+
+// Карта демки по заголовку (без полного разбора) — для архива при добавлении пачки демок
+#[tauri::command]
+pub fn demo_header(path: String) -> String {
+    demo_map(Path::new(&path))
+}
+
+// Аккаунты Steam этого компа (SteamID64): сначала тот, что сейчас запущен (реестр ActiveUser),
+// потом остальные из loginusers.vdf. По ним «Эдит» узнаёт, кто ты, среди игроков демок — в пати
+// с другом общих игроков несколько, и «у кого больше киллов» брал не того.
+#[tauri::command]
+pub fn steam_users() -> Vec<String> {
+    let reg = |key: &str, val: &str| -> Option<String> {
+        let mut cmd = Command::new("reg");
+        cmd.args(["query", key, "/v", val]);
+        crate::render::no_window(&mut cmd);
+        let out = String::from_utf8_lossy(&cmd.output().ok()?.stdout).to_string();
+        out.lines().find(|l| l.contains(val))?.split_whitespace().last().map(str::to_string)
+    };
+    let mut ids: Vec<String> = Vec::new();
+    if let Some(hex) = reg(r"HKCU\Software\Valve\Steam\ActiveProcess", "ActiveUser") {
+        if let Ok(acc) = u64::from_str_radix(hex.trim_start_matches("0x"), 16) {
+            if acc > 0 { ids.push((76561197960265728u64 + acc).to_string()); }
+        }
+    }
+    let root = reg(r"HKCU\Software\Valve\Steam", "SteamPath").unwrap_or_else(|| r"C:\Program Files (x86)\Steam".into());
+    if let Ok(vdf) = fs::read_to_string(Path::new(&root).join("config").join("loginusers.vdf")) {
+        for l in vdf.lines() {
+            let t = l.trim().trim_matches('"');
+            if t.len() == 17 && t.starts_with("7656") && t.chars().all(|c| c.is_ascii_digit()) && !ids.iter().any(|x| x == t) {
+                ids.push(t.to_string());
+            }
+        }
+    }
+    ids
+}

@@ -8,6 +8,7 @@ mod render;
 mod sky;
 mod skins;
 mod toast;
+mod whisper;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -47,6 +48,9 @@ pub fn run() {
       gallery::trash_clip,
       gallery::list_replays,
       gallery::open_replays,
+      gallery::demo_header,
+      gallery::steam_users,
+      whisper::track_words,
       toast::toast_data,
       toast::toast_close,
       toast::toast_open
