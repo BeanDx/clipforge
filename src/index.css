@@ -28,3 +28,6 @@ img { -webkit-user-drag: none; pointer-events: none; }
 .crash b { font-size: 1.6rem; color: #f5c518; }
 .crash pre { max-height: 50vh; overflow: auto; padding: 14px; background: #0c1016; border: 1px solid #2c3a4b; color: #e5484d; font: 12px/1.5 "JetBrains Mono", monospace; white-space: pre-wrap; }
 .crash .go { align-self: flex-start; }
+
+/* окно не в фокусе (ты в игре): анимации на паузе — src/lib/idle.js */
+html.cf-idle *, html.cf-idle *::before, html.cf-idle *::after { animation-play-state: paused !important; }

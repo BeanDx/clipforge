@@ -16,6 +16,10 @@ export const LYRIC_STYLES = [
   { id: "accent", short: "одно слово крупно, акценты красным, под бит", label: "Акцент", font: '"Oswald"', weight: 700,
     screen: true, snap: true, multiply: true, extraFonts: ['800 40px "Rubik"'],
     help: "Как в TikTok-эдитах: по одному слову крупно в центре экрана. Слова сменяются ровно на ударах трека, буквы собираются вразнобой. Ударные слова огромные темно-красные и окрашивают саму карту, так что сквозь них видно текстуру: это весь припев и самое длинное слово каждой строки. Остальные слова белые, светятся и подсвечивают карту." },
+  // только для вкладки «Эдит» (в списке стилей не показывается)
+  { id: "stack", hidden: true, short: "слова столбиком слева, разными цветами, под бит", label: "Акцент слева", font: '"Oswald"', weight: 700,
+    screen: true, snap: true, multiply: true, extraFonts: ['800 40px "Rubik"'],
+    help: "Как в TikTok-эдитах: припев идет по слову крупно в центре, как «Акцент». Остальные строки другим шрифтом у левого края: слова появляются на ударах и копятся столбиком. Короткие слова светло-кремовые, ударное слово крупное ярко-розовое, остальные белые." },
   { id: "night", short: "сиреневое свечение, сердце вокруг слова", label: "Night", font: '"Fredoka"', weight: 700,
     extraFonts: ['700 40px "Nunito"'], inFrame: true,
     help: "Как в ночных эдитах: крупные розово-сиреневые буквы со свечением выпрыгивают по одной и висят в мире, длинная строка встает в два ряда. Вокруг слова вроде «тебя» или «you» светящейся линией рисуется сердце с искрами. В конце строка блекнет и рассыпается." },
@@ -350,6 +354,89 @@ function accent(ctx, { p, t, size, k, pi, sc, words, maxW = size * 22, mul }) {
   ctx.restore(); mul?.restore();
 }
 
+// ---- Акцент слева (эдит, как в референсе): припев — как «Акцент», по слову крупно в центре.
+// Остальные строки — другим шрифтом у левого края: слова копятся столбиком, каждое своим цветом
+// по роли: короткие («I», «я», «и») — светло-кремовые, ударное — крупное розовое, остальные — белые.
+// Ударное слово — в своём ряду. ----
+const CREAM = "#f6ecc4", PINK = "#ff2a8c";
+
+// слово от левого края (x = 0), буквы собираются как у «Акцента»
+function leftWord(ctx, text, { fs, font, color, glow, k, alpha, enter, seed, maxW }) {
+  ctx.save();
+  ctx.font = font(fs);
+  const { w0, letters } = letterStates(ctx, text, enter, seed);
+  const fit = Math.min(1, maxW / Math.max(w0, 1));
+  const punch = 1 + 0.1 * (1 - clamp01(enter / 0.16));
+  ctx.translate((w0 * fit) / 2, 0);
+  ctx.scale(fit * punch, fit * punch);
+  eachLetter(ctx, letters, alpha, (l) => {
+    ctx.fillStyle = color;
+    ctx.shadowColor = glow;
+    ctx.shadowBlur = 24 * k;
+    ctx.fillText(l.ch, -l.cw / 2, 0);
+    ctx.shadowColor = "rgba(0,0,0,.45)";
+    ctx.shadowBlur = 8 * k;
+    ctx.shadowOffsetY = 3 * k;
+    ctx.fillText(l.ch, -l.cw / 2, 0);
+  });
+  ctx.restore();
+}
+
+function stack(ctx, args) {
+  if (args.p.chorus) return accent(ctx, args);
+  const { t, size, k, pi, sc, words, maxW = size * 22 } = args;
+  if (!words.length || t < words[0].ws) return;
+  const cx = maxW / 1.7; // половина ширины кадра
+  const rowW = cx * 0.95;
+  const letters = (w) => w.w.replace(/[^\p{L}\p{N}]/gu, "").length;
+  const longest = words.reduce((b, w, wi) => (letters(w) > letters(words[b]) ? wi : b), 0);
+  const roles = words.map((w, wi) => (wi === longest && letters(w) >= 4 ? "key" : letters(w) <= 2 ? "short" : "plain"));
+  const look = (r) => r === "key"
+    ? { fs: size * 4.4, font: WHITE_FONT, color: PINK, glow: "rgba(255,42,140,.75)" }
+    : r === "short"
+      ? { fs: size * 3.4, font: WHITE_FONT, color: CREAM, glow: "rgba(255,240,190,.6)" }
+      : { fs: size * 2.5, font: WHITE_FONT, color: "#ffffff", glow: "rgba(255,250,240,.8)" };
+  // ширина слова в его шрифте (с ужатием под ряд)
+  const widthOf = (wi) => {
+    const L = look(roles[wi]);
+    ctx.save();
+    ctx.font = L.font(L.fs);
+    const w = ctx.measureText(words[wi].w.toUpperCase()).width;
+    ctx.restore();
+    return Math.min(w, rowW);
+  };
+  // ряды по всей строке сразу — слова не прыгают, когда появляются новые
+  const rows = [];
+  let row = null;
+  words.forEach((w, wi) => {
+    const wd = widthOf(wi), gap = size * 0.45;
+    const alone = roles[wi] === "key";
+    if (!row || alone || row.key || row.w + gap + wd > rowW) { row = { items: [], w: 0, h: 0, key: alone }; rows.push(row); }
+    row.items.push({ wi, x: row.items.length ? row.w + gap : 0 });
+    row.w = row.items.length > 1 ? row.w + gap + wd : wd;
+    row.h = Math.max(row.h, look(roles[wi]).fs * 0.92);
+  });
+  const total = rows.reduce((s, r) => s + r.h, 0);
+  const alpha = 1 - Math.pow(sc, 1.4);
+  let y = -total * 0.2 + cx * 0.12; // блок чуть ниже середины, как в референсе
+  const x0 = -cx * 0.84;
+  for (const r of rows) {
+    const cy = y + r.h / 2;
+    for (const it of r.items) {
+      const w = words[it.wi];
+      if (t < w.ws) continue;
+      const L = look(roles[it.wi]);
+      const enter = t - w.ws;
+      const opts = { k, alpha, enter, seed: pi * 911 + it.wi * 37, maxW: rowW, t };
+      ctx.save();
+      ctx.translate(x0 + it.x, cy - sc * size * 0.4);
+      leftWord(ctx, w.w.toUpperCase(), { ...opts, fs: L.fs, font: L.font, color: L.color, glow: L.glow });
+      ctx.restore();
+    }
+    y += r.h;
+  }
+}
+
 // Слова встают на удары трека: начало слова переносится на ближайший удар (до 0.22 с),
 // но порядок слов сохраняется и между ними остаётся хотя бы 0.08 с
 export function snapWords(words, beats) {
@@ -530,7 +617,7 @@ export function heartWord(text) {
   return i;
 }
 
-const DRAW = { karaoke, world, neon, typewriter, glitch, accent, night };
+const DRAW = { karaoke, world, neon, typewriter, glitch, accent, stack, night };
 
 // Рисует кусок строки стилем style в уже настроенной системе координат (центр строки — 0, 0)
 export function drawLyricStyle(ctx, style, args) {

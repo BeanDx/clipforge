@@ -307,7 +307,7 @@ const ZOOM_QUIET = 2.5, ZOOM_GAP = 5;
 // камера иногда коротко тянется вбок к строке (zoom.json для ffmpeg).
 // Для стилей с multiply рядом пишется второй слой кадров (m*.png, lyrics_mul.ffconcat).
 // night — эффекты пресета Night на тех же кадрах: { dust, eye, targets } (пыль и рамка на цели, src/nightfx.js)
-export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo, drops = [], fov, fps, W, H, save, onFrame, style = "karaoke", beats = [], smart = true, night = null, wordTimes = null }) {
+export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo, drops = [], fov, fps, W, H, save, onFrame, style = "karaoke", beats = [], smart = true, night = null, wordTimes = null, hide = [] }) {
   const st = lyricStyle(style);
   const cam = smoothCam(rawCam);
   const lines = parseLrc(lrc);
@@ -398,7 +398,9 @@ export async function renderLyricFrames({ lrc, start, clip, cam: rawCam, slowmo,
       p.yaw = anchors[p.li].yaw + p.side * (style === "night" ? 9 : 24);
       p.pitch = anchors[p.li].pitch;
     }
-    let live = parts.filter((p) => !p.hide && tTrack >= p.t0 && tTrack < p.end);
+    // hide — отрезки (секунды кадра), где текста нет: например, рамка на цели в эдите
+    const hidden = hide.some(([a, b]) => tOut >= a && tOut < b);
+    let live = hidden ? [] : parts.filter((p) => !p.hide && tTrack >= p.t0 && tTrack < p.end);
     // экранный стиль показывает одно слово: только самую свежую строку
     if (st.screen && live.length > 1) live = [live.reduce((a, b) => (b.t0 > a.t0 ? b : a))];
     let name, mname;
@@ -778,7 +780,7 @@ function LyricStylePicker({ value, onChange, Hint }) {
       </button>
       <div className={`ly-list ${open ? "is-open" : ""}`}>
         <div>
-          {LYRIC_STYLES.map((s) => (
+          {LYRIC_STYLES.filter((s) => !s.hidden).map((s) => (
             <button key={s.id} type="button" className={`ly-item ${s.id === value ? "is-on" : ""}`}
               onClick={() => { onChange(s.id); setOpen(false); }}>
               <b style={{ fontFamily: s.font, fontWeight: s.weight }}>{tr(s.label)}</b>

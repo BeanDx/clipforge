@@ -8,7 +8,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use tauri::{AppHandle, Emitter};
 
-use crate::render::{beat_filter, codec_args, flash_filter, no_window, stretch};
+use crate::render::{codec_args, no_window, stretch};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,6 +21,9 @@ pub struct Segment {
     // чёрно-белый кусок (очередь коротких киллов)
     #[serde(default)]
     pub gray: bool,
+    // кусок задом наперёд (перемотка назад в слоу-мо)
+    #[serde(default)]
+    pub reverse: bool,
 }
 
 // вспышка цвета на секунде t итоговой шкалы: "red" — заливка после килла, "pink" — яркая вспышка
@@ -54,9 +57,6 @@ pub struct Montage {
     // секунды склеек (итоговая шкала): там рывок с горизонтальным размытием
     #[serde(default)]
     pub whips: Vec<f64>,
-    // секунды киллов: удар зума
-    #[serde(default)]
-    pub punches: Vec<f64>,
     #[serde(default)]
     pub music: Option<MontageMusic>,
     #[serde(default)]
@@ -75,7 +75,7 @@ fn has_audio(ff: &Path, p: &str) -> bool {
     cmd.output().map(|o| String::from_utf8_lossy(&o.stderr).contains("Audio:")).unwrap_or(false)
 }
 
-fn graph(m: &Montage, inputs: &[String], game_audio: bool, rubberband: bool, work: &Path) -> (String, f64) {
+fn graph(m: &Montage, inputs: &[String], game_audio: bool, rubberband: bool) -> (String, f64) {
     let mut g = String::new();
     let mut total = 0.0;
     let n = m.segments.len();
@@ -83,12 +83,13 @@ fn graph(m: &Montage, inputs: &[String], game_audio: bool, rubberband: bool, wor
         let i = inputs.iter().position(|p| *p == s.path).unwrap_or(0);
         let sp = s.speed.clamp(0.25, 4.0);
         g += &format!(
-            "[{i}:v]trim=start={:.4}:end={:.4},setpts=(PTS-STARTPTS)/{sp:.5},fps={},scale={}:{},setsar=1{}[v{k}];",
-            s.from, s.to, m.fps, m.width, m.height, if s.gray { ",hue=s=0" } else { "" }
+            "[{i}:v]trim=start={:.4}:end={:.4},setpts=PTS-STARTPTS{},setpts=(PTS-STARTPTS)/{sp:.5},fps={},scale={}:{},setsar=1{}[v{k}];",
+            s.from, s.to, if s.reverse { ",reverse" } else { "" }, m.fps, m.width, m.height, if s.gray { ",hue=s=0" } else { "" }
         );
         if game_audio {
             let tempo = if (sp - 1.0).abs() < 1e-3 { "anull".to_string() } else { stretch(sp, rubberband) };
-            g += &format!("[{i}:a]atrim=start={:.4}:end={:.4},asetpts=PTS-STARTPTS,aresample=48000,{tempo}[a{k}];", s.from, s.to);
+            g += &format!("[{i}:a]atrim=start={:.4}:end={:.4},asetpts=PTS-STARTPTS{},aresample=48000,{tempo}[a{k}];",
+                s.from, s.to, if s.reverse { ",areverse" } else { "" });
         }
         total += (s.to - s.from) / sp;
     }
@@ -104,15 +105,7 @@ fn graph(m: &Montage, inputs: &[String], game_audio: bool, rubberband: bool, wor
         g += &format!(";{v}avgblur=sizeX={}:sizeY=1:enable='{en}'[vw]", (m.width / 30).max(8));
         v = "[vw]".into();
     }
-    // на килле: розовая вспышка-свечение и резкое приближение, которое плавно отпускает
-    if let Some(fl) = flash_filter(&m.punches, "pink", m.height, work) {
-        g += &format!(";{v}{fl}[vf]");
-        v = "[vf]".into();
-    }
-    if let Some(bf) = beat_filter(&m.punches, "zoom", 2.2, m.width, m.height) {
-        g += &format!(";{v}{bf}[vp]");
-        v = "[vp]".into();
-    }
+    // на киллах ни свечения, ни зума: склейки в эдите жёсткие, кадр не дёргается (как в референсе)
     // вспышки цвета: заливка поверх кадра, гаснет ступеньками (drawbox дешевле формул по пикселям)
     let mut boxes: Vec<String> = Vec::new();
     for f in &m.flashes {
@@ -174,9 +167,9 @@ pub async fn build_montage(app: AppHandle, m: Montage) -> Result<String, String>
         no_window(&mut cmd);
         cmd.output().map(|o| String::from_utf8_lossy(&o.stdout).contains(" rubberband ")).unwrap_or(false)
     };
-    // папка файла команд вспышки (flash.cmd) — рядом с готовым эдитом, после сборки удаляется
+    // рабочая папка ffmpeg — рядом с готовым эдитом (flash.cmd прошлых версий оттуда удаляется)
     let work = Path::new(&m.out).parent().map(Path::to_path_buf).unwrap_or_default();
-    let (g, total) = graph(&m, &inputs, game_audio, rubberband, &work);
+    let (g, total) = graph(&m, &inputs, game_audio, rubberband);
     let run = |enc: Option<&str>| {
         let mut cmd = Command::new(&ff);
         cmd.current_dir(&work);

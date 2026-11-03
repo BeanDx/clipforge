@@ -48,6 +48,38 @@ pub fn detect_beats(ff: &Path, track: &str, offset: f64, dur: f64) -> Vec<f64> {
     beats
 }
 
+// Огибающие всего трека для разбора ритма эдита (src/features/edit/rhythm.js): каждые 10 мс —
+// логарифм энергии низких частот (как в detect_beats) и громкость всего сигнала
+#[derive(Serialize)]
+pub struct TrackEnv {
+    hop: f64,
+    low: Vec<f32>,
+    rms: Vec<f32>,
+}
+
+#[tauri::command]
+pub async fn track_env(hlae: String, path: String) -> Result<TrackEnv, String> {
+    const RATE: usize = 8000;
+    const HOP: usize = 80;
+    let ff = crate::ffmpeg::find(&hlae).ok_or("не найден ffmpeg")?;
+    let pcm = |af: &str| -> Result<Vec<f32>, String> {
+        let mut cmd = Command::new(&ff);
+        cmd.args(["-hide_banner", "-loglevel", "error", "-i"]).arg(&path)
+            .args(["-af", af, "-ac", "1", "-f", "f32le", "pipe:1"]);
+        crate::render::no_window(&mut cmd);
+        let out = cmd.output().map_err(|e| format!("ffmpeg: {e}"))?;
+        Ok(out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect())
+    };
+    let low = pcm(&format!("lowpass=f=160,aresample={RATE}"))?;
+    let all = pcm(&format!("aresample={RATE}"))?;
+    let sq = |c: &[f32]| c.iter().map(|x| (*x as f64).powi(2)).sum::<f64>();
+    Ok(TrackEnv {
+        hop: HOP as f64 / RATE as f64,
+        low: low.chunks_exact(HOP).map(|c| (1.0 + 1000.0 * sq(c)).ln() as f32).collect(),
+        rms: all.chunks_exact(HOP).map(|c| (sq(c) / HOP as f64).sqrt() as f32).collect(),
+    })
+}
+
 // Удары куска трека для текста песни, у которого слова встают на удары (стиль «Акцент»).
 // Секунды от offset — как у detect_beats.
 #[tauri::command]

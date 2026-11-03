@@ -13,6 +13,8 @@ import { editKills, commonPlayer, flickOf, scoreKill, groupKills, clipOf, partIn
 import { mapName } from "../match/dossier";
 import { useTrackPlayer, parseLrc, renderLyricFrames } from "../music/music";
 import { alignWordTimes } from "../music/lyricsAlign";
+import { analyzeTrack, gridFrom, pickDrop } from "./rhythm";
+import { linkMatch, highlightRounds, killsByRound } from "../home/gsiLink";
 import previewBg from "../../assets/previews/lyrics-bg.webp";
 
 const SNIPER_OR_KNIFE = /awp|ssg08|knife|bayonet/;
@@ -157,7 +159,7 @@ function EditProgress({ job, progress, stage }) {
   );
 }
 
-export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusic, video, playerId, rendering, progress, stage, renderPart, onDone, onGoSound }) {
+export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusic, video, playerId, rendering, progress, stage, renderPart, onDone, onGoSound, preset }) {
   const [replays, setReplays] = useState([]);
   const [chosen, setChosen] = useState(() => new Set());
   const [scan, setScan] = useState(null); // { me, groups: [...] }
@@ -180,8 +182,12 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
   // уже записанные демки этой сборки: если запись упала (например, вылетела CS2), повторное
   // «Собрать эдит» с теми же моментами продолжает с упавшей демки, а не пишет всё заново
   const doneRef = useRef(null); // { sig, stamp, demos: Map(demoPath -> dir) }
+  // куски последнего собранного эдита: «Пересобрать с другим треком» склеивает их заново без игры
+  const [last, setLast] = useState(() => { try { return JSON.parse(localStorage.getItem("cf-edit-last")) || null; } catch { return null; } });
 
   useEffect(() => { if (cs2) invoke("list_replays", { cs2 }).then(setReplays).catch(() => {}); }, [cs2]);
+  // «в эдит» с главной: сразу выбраны эти демки
+  useEffect(() => { if (preset?.demos?.length) setChosen(new Set(preset.demos)); }, [preset]);
 
   // все известные демки: скачанные матчи CS2 и архив, без повторов
   const demos = useMemo(() => {
@@ -204,7 +210,9 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
   const [pickN, setPickN] = useState(() => { try { return Number(localStorage.getItem("cf-edit-n")) || 24; } catch { return 24; } });
   useEffect(() => { try { localStorage.setItem("cf-edit-hs", hsOnly ? "1" : "0"); localStorage.setItem("cf-edit-n", String(pickN)); } catch {} }, [hsOnly, pickN]);
   const autoPick = (groups, n) => {
-    const top = pickDiverse(groups, n);
+    // хайлайты, отмеченные во время игры (gsi.rs), берутся всегда, остальное — по оценке
+    const marked = groups.filter((g) => g.bookmark);
+    const top = [...marked, ...pickDiverse(groups.filter((g) => !g.bookmark), Math.max(0, n - marked.length))].slice(0, MAX_PICK);
     setPicked(new Set(top.map((g) => g.id)));
     setIntro((top.find((g) => g.special) || top[0])?.id ?? null);
   };
@@ -216,6 +224,8 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
   const scoreFor = async (me, hs = hsOnly, n = pickN) => {
     const { paths, raws } = parsed.current;
     const groups = [];
+    // матчи, записанные во время игры: по ним видно, какие раунды ты отметил (или были 3K+)
+    const played = (await invoke("gsi_home").catch(() => null))?.history?.matches || [];
     for (let i = 0; i < paths.length; i++) {
       setBusy(tr("ищу флики: демка {0}/{1}...", i + 1, paths.length));
       const raw = raws[i];
@@ -227,6 +237,7 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
       const player = (raw.players || []).find((p) => String(p.steamid) === me);
       const roster = (raw.players || []).map((p) => ({ id: String(p.steamid), name: p.name, team: p.team_number, slot: p.slot }));
       const map = demos.find((d) => d.path === paths[i])?.map || "";
+      const hl = highlightRounds(linkMatch(map, killsByRound(editKills(raw, me)), played));
       for (const g of groupKills(kills)) {
         g.kills.forEach((k) => Object.assign(k, scoreKill(k)));
         const score = g.kills.reduce((s, k) => s + k.score, 0);
@@ -235,6 +246,7 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
           id: `${i}:${g.round}:${g.kills[0].tick}`, demo: paths[i], di: i, map, round: g.round, kills: g.kills, score, tags,
           weapon: g.kills.at(-1).weapon, flick: Math.max(...g.kills.map((k) => k.flick || 0)),
           special: g.kills.some((k) => SNIPER_OR_KNIFE.test(k.weapon)), name: player?.name || "", slot: player?.slot ?? 1, roster,
+          bookmark: hl.get(g.round) || null,
         });
       }
     }
@@ -316,126 +328,193 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
     await new Promise((r) => setTimeout(r, 5000));
   };
 
-  const build = async () => {
+  // recut — куски прошлого эдита (last): запись пропускается, заново только склейка под текущий трек
+  const build = async (recut = null) => {
     setErr(""); setResult(null); cancel.current = false;
-    if (!resumable) doneRef.current = { sig, stamp: new Date().toISOString().slice(0, 19).replace("T", "_").replace(/:/g, "-"), demos: new Map() };
-    const { stamp, demos: doneDemos } = doneRef.current;
+    const newStamp = () => new Date().toISOString().slice(0, 19).replace("T", "_").replace(/:/g, "-");
+    if (recut) doneRef.current = null;
+    else if (!resumable) doneRef.current = { sig, stamp: newStamp(), demos: new Map() };
+    const stamp = recut ? newStamp() : doneRef.current.stamp;
+    // текст Night уже вшит в интро при записи — у пересборки стиль текста тот, с которым писали
+    const ts = recut ? recut.textStyle : textStyle;
     try {
       const base = await join(out, ".clipforge_edit", stamp);
-      const parts = []; // { g, path, info }
-      const byDemo = new Map();
-      for (const g of sel) { if (!byDemo.has(g.demo)) byDemo.set(g.demo, []); byDemo.get(g.demo).push(g); }
-      // запись — один шаг (все демки за один запуск игры), потом склейка
-      const maps = [[...byDemo.values()].map((gs) => mapName(gs[0].map) || "demo").join(" → ")];
-      setJob({ startedAt: Date.now(), total: 1, done: 0, phase: "rec", maps, cut: { frac: 0, mb: 0 }, label: "" });
-      // клипы одной демки — по порядку в демке: игра проигрывает её вперёд
-      const plans = [...byDemo].map(([demoPath, gs]) => {
-        gs.sort((a, b) => a.kills[0].tick - b.kills[0].tick);
-        const clips = gs.map((g) => ({ ...clipOf(g, {
-          steamid: scan.me, name: g.name, slot: g.slot, intro: g === introG,
-          night: nightScope === "all" || (nightScope === "intro" && g === introG),
-        }), demo: demoPath }));
-        return { demoPath, gs, clips };
-      });
-      // все ещё не записанные демки — за один запуск CS2: F10 жмётся один раз в первой демке,
-      // дальше игра сама открывает следующую и пишет её клипы (render.rs, cf_<i>_load)
-      const todo = plans.filter((p) => !doneDemos.has(p.demoPath));
-      if (todo.length) {
-        if (resumable) { setBusy(tr("жду, пока CS2 закроется...")); await waitGameClosed(); }
-        setBusy(todo.length > 1
-          ? tr("запись {0} демок за один запуск: в игре нажми F10, когда загрузится первая, дальше все само", todo.length)
-          : tr("запись демки: в игре нажми F10, когда демка загрузится"));
-        const dir = await join(base, `r${doneDemos.size}`);
-        await renderPart({ demoPath: todo[0].demoPath, steamid: scan.me, roster: todo[0].gs[0].roster,
-          clips: todo.flatMap((p) => p.clips), partsDir: dir, partLyrics: textStyle === "night" });
-        // куски нумеруются подряд по всему заданию: part_00… сначала первой демки, потом следующей
-        let first = 0;
-        for (const p of todo) { doneDemos.set(p.demoPath, { dir, first }); first += p.clips.length; }
-      }
-      for (const p of plans) {
-        const { dir, first } = doneDemos.get(p.demoPath);
-        for (let i = 0; i < p.gs.length; i++) {
-          parts.push({ g: p.gs[i], path: await join(dir, `part_${String(first + i).padStart(2, "0")}.mp4`), info: partInfo(p.clips[i]) });
-        }
-      }
+      const parts = recut ? recut.parts : await recordParts(base);
       setBusy(tr("собираю эдит под бит..."));
-      setJob((j) => ({ ...j, done: j.total, phase: "cut" }));
-      const unCut = await listen("montage-progress", (e) => setJob((j) => j && ({ ...j, cut: e.payload })));
-      // порядок: интро, потом по нарастающей — самые крутые киллы в конце
-      const intro0 = parts.find((p) => p.g === introG);
-      const rest = parts.filter((p) => p !== intro0).sort((a, b) => a.g.score - b.g.score);
-      const order = [intro0, ...rest].filter(Boolean).map((p) => ({ path: p.path, dur: p.info.dur, kills: p.info.kills, intro: p === intro0, score: p.g.score }));
-      // Дроп — на начало припева (как в TikTok-эдитах: киллы подряд идут на самой громкой части).
-      // Припев — первая повторяющаяся строка после начала трека. Если до него слишком далеко или
-      // близко для интро, начало трека в эдите сдвигается так, чтобы интро закончилось на припеве.
-      // (Для текста Night в интро начало не трогаем: текст там уже записан в кусок.)
-      let start = music.start || 0, dropAt = null;
-      if (textStyle === "accent" && music.lrc && intro0) {
-        const ls = parseLrc(music.lrc).filter((l) => l.text);
-        const key = (t) => t.toLowerCase().replace(/[^\p{L}\p{N} ]/gu, "").trim();
-        const cnt = new Map();
-        ls.forEach((l) => cnt.set(key(l.text), (cnt.get(key(l.text)) || 0) + 1));
-        const chorus = ls.find((l) => l.t >= start + 3 && (cnt.get(key(l.text)) || 0) >= 2 && key(l.text).length > 3);
-        if (chorus) {
-          const introLen = intro0.info.dur + 0.5;
-          if (chorus.t - start > introLen + 1.5 || chorus.t - start < 4) start = Math.max(0, chorus.t - introLen);
-          dropAt = chorus.t - start;
-        }
+      if (recut) setJob({ startedAt: Date.now(), total: 1, done: 1, phase: "cut", maps: [recut.maps], cut: { frac: 0, mb: 0 }, label: "" });
+      else setJob((j) => ({ ...j, done: j.total, phase: "cut" }));
+      const file = await cutEdit(parts, base, stamp, ts);
+      if (!recut) {
+        const saved = { stamp, textStyle: ts, maps: job0Maps(), parts };
+        try { localStorage.setItem("cf-edit-last", JSON.stringify(saved)); } catch {}
+        setLast(saved);
       }
-      const beats = await invoke("track_beats", { hlae, path: music.path, offset: start, dur: 240 }).catch(() => []);
-      const plan = planRhythm(order, beats, { dropAt });
-      // «Акцент» — по слову на удар поверх всего эдита: кадры текста на итоговой шкале эдита
-      // (30 к/с хватает для текста), слова встают на удары трека
-      let lyrics = null;
-      if (textStyle === "accent" && lyricsReady) {
-        setBusy(tr("текст поверх эдита..."));
-        const dir = await join(base, "lyrics");
-        const save = (name, bytes) => invoke("save_file", bytes, { headers: { "x-path": encodeURIComponent(`${dir}\\${name}`) } });
-        // время каждого слова по звуку (Whisper + сопоставление с текстом): слово выходит, когда его поют
-        let wordTimes = null;
-        try {
-          setBusy(tr("ставлю каждое слово на свое место в треке..."));
-          let words = wordsCache.current.get(music.path);
-          if (!words) {
-            const lang = /[а-яё]/i.test(music.lrc) ? "ru" : "auto";
-            words = await invoke("track_words", { hlae, path: music.path, lang });
-            wordsCache.current.set(music.path, words);
-          }
-          const all = parseLrc(music.lrc);
-          const idx = all.map((l, i) => (l.text ? i : -1)).filter((i) => i >= 0);
-          const wt = alignWordTimes(idx.map((i) => all[i].text), words.map(([t, w]) => ({ t, w })));
-          // слово далеко от своей строки (ошибка сопоставления) — не берём, остаётся время по строке
-          wordTimes = new Map(idx.map((li, n) => {
-            const next = all.slice(li + 1).find((l) => l.text)?.t ?? all[li].t + 8;
-            return [li, wt[n].map((t) => (t != null && t >= all[li].t - 0.6 && t <= next + 0.3 ? t : null))];
-          }));
-        } catch { wordTimes = null; }
-        setBusy(tr("текст поверх эдита..."));
-        const list = await renderLyricFrames({
-          lrc: music.lrc, start, clip: { start: 0, end: Math.ceil(plan.total * 64), killTicks: [] }, cam: [],
-          slowmo: false, fps: 30, W: video.width, H: video.height, save, style: "accent", smart: false,
-          beats: beats.map((b) => start + b), wordTimes,
-        });
-        await save("lyrics.ffconcat", new TextEncoder().encode(list));
-        lyrics = { list: `${dir}\\lyrics.ffconcat`, mul: `${dir}\\lyrics_mul.ffconcat` };
-        setBusy(tr("собираю эдит под бит..."));
-      }
-      const file = await join(out, `${stamp.replace("_", " ")} night edit.mp4`);
-      await invoke("build_montage", { m: {
-        hlae, out: file, fps: video.fps, width: video.width, height: video.height, crf: video.crf, gpuEncoder: video.gpu,
-        segments: plan.segments, whips: plan.whips, punches: plan.punches, flashes: plan.flashes,
-        music: { path: music.path, start, musicVol: music.musicVol, gameVol: Math.min(music.gameVol, 0.55) },
-        lyrics: lyrics?.list ?? null, lyricsMul: lyrics?.mul ?? null,
-      } }).finally(unCut);
-      setResult({ file, total: plan.total, kills: plan.punches.length });
       doneRef.current = null;
       onDone?.(file);
     } catch (e) {
       const left = byDemoCount() - (doneRef.current?.demos.size || 0);
-      setErr(String(e.message || e) + (doneRef.current?.demos.size ? " · " + tr("записанные демки сохранены: нажми «Продолжить сборку», осталось {0}", left) : ""));
+      setErr(String(e.message || e) + (!recut && doneRef.current?.demos.size ? " · " + tr("записанные демки сохранены: нажми «Продолжить сборку», осталось {0}", left) : ""));
     }
     setBusy("");
     setJob(null);
+  };
+  const byDemoGroups = () => {
+    const byDemo = new Map();
+    for (const g of sel) { if (!byDemo.has(g.demo)) byDemo.set(g.demo, []); byDemo.get(g.demo).push(g); }
+    return byDemo;
+  };
+  const job0Maps = () => [...byDemoGroups().values()].map((gs) => mapName(gs[0].map) || "demo").join(" → ");
+
+  // запись кусков в игре: [{ path, info, score, intro }] по всем выбранным моментам
+  const recordParts = async (base) => {
+    const { demos: doneDemos } = doneRef.current;
+    const parts = [];
+    const byDemo = byDemoGroups();
+    // запись — один шаг (все демки за один запуск игры), потом склейка
+    const maps = [job0Maps()];
+    setJob({ startedAt: Date.now(), total: 1, done: 0, phase: "rec", maps, cut: { frac: 0, mb: 0 }, label: "" });
+    // рамка на цели (как ВХ сквозь смок) — только на одном, самом крутом килле через смок во всём эдите
+    let bestSmoke = null;
+    for (const g of sel) for (const kk of g.kills) {
+      const sc = scoreKill(kk).score;
+      if (kk.smoke && (!bestSmoke || sc > bestSmoke.score)) bestSmoke = { tick: kk.tick, demo: g.demo, score: sc };
+    }
+    // клипы одной демки — по порядку в демке: игра проигрывает её вперёд
+    const plans = [...byDemo].map(([demoPath, gs]) => {
+      gs.sort((a, b) => a.kills[0].tick - b.kills[0].tick);
+      const clips = gs.map((g) => {
+        const c = clipOf(g, {
+          steamid: scan.me, name: g.name, slot: g.slot, intro: g === introG,
+          night: nightScope === "all" || (nightScope === "intro" && g === introG),
+        });
+        const box = bestSmoke && bestSmoke.demo === demoPath && c.boxTicks.includes(bestSmoke.tick) ? [bestSmoke.tick] : [];
+        return { ...c, boxTicks: box, demo: demoPath };
+      });
+      return { demoPath, gs, clips };
+    });
+    // все ещё не записанные демки — за один запуск CS2: F10 жмётся один раз в первой демке,
+    // дальше игра сама открывает следующую и пишет её клипы (render.rs, cf_<i>_load)
+    const todo = plans.filter((p) => !doneDemos.has(p.demoPath));
+    if (todo.length) {
+      if (resumable) { setBusy(tr("жду, пока CS2 закроется...")); await waitGameClosed(); }
+      setBusy(todo.length > 1
+        ? tr("запись {0} демок за один запуск: в игре нажми F10, когда загрузится первая, дальше все само", todo.length)
+        : tr("запись демки: в игре нажми F10, когда демка загрузится"));
+      const dir = await join(base, `r${doneDemos.size}`);
+      await renderPart({ demoPath: todo[0].demoPath, steamid: scan.me, roster: todo[0].gs[0].roster,
+        clips: todo.flatMap((p) => p.clips), partsDir: dir, partLyrics: textStyle === "night" });
+      // куски нумеруются подряд по всему заданию: part_00… сначала первой демки, потом следующей
+      let first = 0;
+      for (const p of todo) { doneDemos.set(p.demoPath, { dir, first }); first += p.clips.length; }
+    }
+    for (const p of plans) {
+      const { dir, first } = doneDemos.get(p.demoPath);
+      for (let i = 0; i < p.gs.length; i++) {
+        parts.push({ path: await join(dir, `part_${String(first + i).padStart(2, "0")}.mp4`), info: partInfo(p.clips[i]), score: p.gs[i].score, intro: p.gs[i] === introG });
+      }
+    }
+    return parts;
+  };
+
+  // склейка под бит текущего трека: ритм, вспышки, текст «Акцент», музыка. Возвращает путь к эдиту
+  const cutEdit = async (parts, base, stamp, textStyle) => {
+    const unCut = await listen("montage-progress", (e) => setJob((j) => j && ({ ...j, cut: e.payload })));
+    // порядок: интро, потом по нарастающей — самые крутые киллы в конце
+    const intro0 = parts.find((p) => p.intro);
+    const rest = parts.filter((p) => p !== intro0).sort((a, b) => a.score - b.score);
+    const order = [intro0, ...rest].filter(Boolean).map((p) => ({ path: p.path, dur: p.info.dur, kills: p.info.kills, box: p.info.box || [], intro: p === intro0, score: p.score }));
+    // Дроп — на начало самой громкой части трека после выбранного начала (припев, крик: киллы
+    // подряд идут именно там). Трек разбирается целиком: точный темп, громкость и акцент каждого
+    // удара (rhythm.js). Начало трека в эдите сдвигается так, чтобы интро закончилось на дропе.
+    // (Для текста Night в интро начало не трогаем: текст там уже записан в кусок.)
+    let start = music.start || 0, dropAt = null, grid = null;
+    setBusy(tr("слушаю трек: темп, громкие места, акценты..."));
+    const env = await invoke("track_env", { hlae, path: music.path }).catch(() => null);
+    const rh = env && analyzeTrack(env);
+    setBusy(tr("собираю эдит под бит..."));
+    if (rh) {
+      if (textStyle === "accent" && intro0) {
+        const need = rest.reduce((s, p) => s + p.info.kills.length, 0) * rh.P * 1.3 + 3;
+        const d = pickDrop(rh, { from: start, introLen: intro0.info.dur + 0.5, need });
+        start = d.start;
+        dropAt = rh.beats[d.dropBeat] - start;
+      }
+      grid = gridFrom(rh, start);
+    } else if (textStyle === "accent" && music.lrc && intro0) {
+      // трек не разобрался — по-старому: припев по тексту, первая повторяющаяся строка
+      const ls = parseLrc(music.lrc).filter((l) => l.text);
+      const key = (t) => t.toLowerCase().replace(/[^\p{L}\p{N} ]/gu, "").trim();
+      const cnt = new Map();
+      ls.forEach((l) => cnt.set(key(l.text), (cnt.get(key(l.text)) || 0) + 1));
+      const chorus = ls.find((l) => l.t >= start + 3 && (cnt.get(key(l.text)) || 0) >= 2 && key(l.text).length > 3);
+      if (chorus) {
+        const introLen = intro0.info.dur + 0.5;
+        if (chorus.t - start > introLen + 1.5 || chorus.t - start < 4) start = Math.max(0, chorus.t - introLen);
+        dropAt = chorus.t - start;
+      }
+    }
+    const beats = grid ? grid.beats : await invoke("track_beats", { hlae, path: music.path, offset: start, dur: 240 }).catch(() => []);
+    const accentOn = textStyle === "accent" && lyricsReady;
+    let wordTimes = null;
+    if (accentOn) {
+      // время каждого слова по звуку (Whisper + сопоставление с текстом): слово выходит, когда его поют
+      try {
+        setBusy(tr("ставлю каждое слово на свое место в треке..."));
+        let words = wordsCache.current.get(music.path);
+        if (!words) {
+          const lang = /[а-яё]/i.test(music.lrc) ? "ru" : "auto";
+          words = await invoke("track_words", { hlae, path: music.path, lang });
+          wordsCache.current.set(music.path, words);
+        }
+        const all = parseLrc(music.lrc);
+        const idx = all.map((l, i) => (l.text ? i : -1)).filter((i) => i >= 0);
+        const wt = alignWordTimes(idx.map((i) => all[i].text), words.map(([t, w]) => ({ t, w })));
+        // слово далеко от своей строки (ошибка сопоставления) — не берём, остаётся время по строке
+        wordTimes = new Map(idx.map((li, n) => {
+          const next = all.slice(li + 1).find((l) => l.text)?.t ?? all[li].t + 8;
+          return [li, wt[n].map((t) => (t != null && t >= all[li].t - 0.6 && t <= next + 0.3 ? t : null))];
+        }));
+      } catch { wordTimes = null; }
+    }
+    // паузы в тексте (строка допета, следующая не началась через секунду) — там слоу-мо с перемоткой
+    const quiet = [];
+    if (accentOn) {
+      const ls = parseLrc(music.lrc).map((l, i) => ({ ...l, i })).filter((l) => l.text);
+      ls.forEach((l, n) => {
+        const nx = ls[n + 1];
+        if (!nx) return;
+        const wt = (wordTimes?.get(l.i) || []).filter((x) => x != null);
+        const end = (wt.length ? Math.max(...wt) + 0.5 : l.t + 2.5);
+        if (nx.t - end >= 1) quiet.push(end - start);
+      });
+    }
+    const plan = planRhythm(order, beats, { dropAt, grid, quiet });
+    // «Акцент» — по слову на удар поверх всего эдита: кадры текста на итоговой шкале эдита
+    // (30 к/с хватает для текста), слова встают на удары трека
+    let lyrics = null;
+    if (accentOn) {
+      setBusy(tr("текст поверх эдита..."));
+      const dir = await join(base, "lyrics");
+      const save = (name, bytes) => invoke("save_file", bytes, { headers: { "x-path": encodeURIComponent(`${dir}\\${name}`) } });
+      setBusy(tr("текст поверх эдита..."));
+      const list = await renderLyricFrames({
+        lrc: music.lrc, start, clip: { start: 0, end: Math.ceil(plan.total * 64), killTicks: [] }, cam: [],
+        slowmo: false, fps: 30, W: video.width, H: video.height, save, style: "stack", smart: false,
+        beats: beats.map((b) => start + b), wordTimes, hide: plan.boxes || [],
+      });
+      await save("lyrics.ffconcat", new TextEncoder().encode(list));
+      lyrics = { list: `${dir}\\lyrics.ffconcat`, mul: `${dir}\\lyrics_mul.ffconcat` };
+      setBusy(tr("собираю эдит под бит..."));
+    }
+    const file = await join(out, `${stamp.replace("_", " ")} night edit.mp4`);
+    await invoke("build_montage", { m: {
+      hlae, out: file, fps: video.fps, width: video.width, height: video.height, crf: video.crf, gpuEncoder: video.gpu,
+      segments: plan.segments, whips: plan.whips, punches: plan.punches, flashes: plan.flashes,
+      music: { path: music.path, start, musicVol: music.musicVol, gameVol: Math.min(music.gameVol, 0.55) },
+      lyrics: lyrics?.list ?? null, lyricsMul: lyrics?.mul ?? null,
+    } }).finally(unCut);
+    setResult({ file, total: plan.total, kills: plan.punches.length });
+    return file;
   };
   const byDemoCount = () => new Set(sel.map((g) => g.demo)).size;
 
@@ -548,7 +627,10 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
                   <button type="button" className="ne-kill__main" onClick={() => togglePick(g.id)}>
                     <span className="ne-kill__w">{WEAPON(g.weapon)}</span>
                     <span className="ne-kill__n mono">{g.kills.length > 1 ? `${g.kills.length}K` : "1K"}</span>
-                    <span className="ne-kill__tags">{g.tags.slice(0, 4).map((t) => <em key={t}>{tr(t)}</em>)}</span>
+                    <span className="ne-kill__tags">
+                      {g.bookmark && <em className="is-game" title={tr("Отмечено во время игры")}>{tr("из игры")} · {tr(g.bookmark[0])}</em>}
+                      {g.tags.slice(0, 4).map((t) => <em key={t}>{tr(t)}</em>)}
+                    </span>
                     <span className="ne-kill__meta mono dim">{mapName(g.map) || "demo"} · R{g.round}{g.flick >= 250 ? ` · ${g.flick}°/s` : ""}</span>
                     <span className="ne-kill__bar"><i style={{ width: `${Math.round((g.score / top) * 100)}%` }} /></span>
                     <b className="ne-kill__score mono">{g.score}</b>
@@ -562,8 +644,10 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
         </Frame>
       )}
 
-      {scan && (
+      {/* пересборка прошлого эдита под другой трек не требует искать моменты заново */}
+      {(scan || last) && (
         <Frame title={tr("4 · Сборка")} meta={sel.length ? tr("~{0} с · {1} демк.", estSec, demoCount) : ""} className="span-2 ne-step ne-build">
+          {scan && <>
           <div className="ne-opts">
             <div className="ne-opt">
               <span className="mono dim">{tr("текст")}</span>
@@ -586,10 +670,22 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
             <div className="ne-build__sum">
               <b>{tr("{0} моментов", sel.length)}</b>
               <span className="dim">{tr("интро: {0}", introG ? `${WEAPON(introG.weapon)} · ${mapName(introG.map) || "demo"} R${introG.round}` : "-")}</span>
-              <span className="dim">{tr("Каждая демка пишется отдельно: когда она загрузится в игре, нажми F10.")}</span>
+              <span className="dim">{tr("Все демки пишутся за один запуск CS2: нажми F10, когда загрузится первая, дальше игра сама.")}</span>
             </div>
-            <button type="button" className="go ne-go" disabled={!canBuild} onClick={build}>{resumable ? tr("Продолжить сборку") : tr("Собрать эдит")}</button>
+            <button type="button" className="go ne-go" disabled={!canBuild} onClick={() => build()}>{resumable ? tr("Продолжить сборку") : tr("Собрать эдит")}</button>
           </div>
+          </>}
+          {last && (
+            <div className="ne-recut">
+              <span className="dim">
+                {last.textStyle === "accent"
+                  ? tr("Прошлый эдит ({0}, {1} моментов) можно склеить заново под выбранный трек, без игры.", last.maps, last.parts.length)
+                  : tr("Прошлый эдит записан с текстом Night: слова старого трека уже в интро, под другой трек его нужно записать заново.")}
+              </span>
+              <button type="button" className="chip" disabled={last.textStyle !== "accent" || !musicReady || rendering || !!busy || !hlae || !out}
+                onClick={() => build(last)}>{tr("Пересобрать с другим треком")}</button>
+            </div>
+          )}
           {job ? <EditProgress job={{ ...job, label: busy }} progress={progress} stage={rendering ? stage : ""} /> : (busy || rendering) && (
             <div className="ne-progress">
               <span className="accent pulse">{stage || busy}</span>

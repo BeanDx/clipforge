@@ -18,6 +18,7 @@ import { CompareModal } from "../features/gallery/CompareModal";
 import { Gallery } from "../features/gallery/Gallery";
 import { LiveStatus } from "./LiveStatus";
 import { NightEdit } from "../features/edit/NightEdit";
+import { Home } from "../features/home/Home";
 import { buildSkyEquirect, skyAzOfYaw } from "../features/edit/nightfx";
 import shotHudMatch from "../assets/previews/hud-match.webp";
 import shotHudDemo from "../assets/previews/hud-demo.webp";
@@ -25,7 +26,8 @@ import "./highlight-renderer.css";
 import { version as APP_VERSION } from "../../package.json";
 
 import { tr, trError, getLang, setLang, useLang } from "../i18n";
-const TABS = ["Демо", "Архив", "Хайлайты", "Эдит", "Рендер", "Очередь", "Библиотека", "Настройки"];
+const TABS = ["Главная", "Демо", "Архив", "Хайлайты", "Эдит", "Рендер", "Очередь", "Библиотека", "Настройки"];
+const HOME_TAB = TABS.indexOf("Главная");
 const DEMO_TAB = TABS.indexOf("Демо");
 const ARCHIVE_TAB = TABS.indexOf("Архив");
 const HIGHLIGHTS_TAB = TABS.indexOf("Хайлайты");
@@ -315,6 +317,8 @@ function NumField({ label, value, onChange }) {
 export default function HighlightRenderer() {
   const lang = useLang();
   const [tab, setTab] = useState(0);
+  // демки, которые «Главная» передаёт во вкладку «Эдит» (кнопка «в эдит»)
+  const [editPreset, setEditPreset] = useState(null);
   const [openClip, setOpenClip] = useState(null); // клип, который надо открыть в «Хайлайтах»
 
   // Рамка активной вкладки — один элемент, который переезжает под нужную кнопку.
@@ -734,6 +738,7 @@ const voicePayload = useMemo(() => {
       listen("render-done", () => { setRendering(false); setStage(""); setProgress(100); waitRef.current?.resolve(); waitRef.current = null; }),
       // «Смотреть» в уведомлении «хайлайт готов» — открываем клип на вкладке «Хайлайты»
       listen("open-clip", (e) => { setOpenClip(String(e.payload)); setTab(HIGHLIGHTS_TAB); }),
+      listen("open-home", () => setTab(HOME_TAB)),
       listen("render-error", (e) => { setRendering(false); setStage(""); setError(String(e.payload)); waitRef.current?.reject(new Error(String(e.payload))); waitRef.current = null; }),
     ];
     return () => subs.forEach((p) => p.then((f) => f()));
@@ -853,11 +858,17 @@ const voicePayload = useMemo(() => {
       const withMusic = !o && music.enabled && music.path;
       const lyricsOn = music.enabled && music.path && music.showLyrics && music.lrc;
       const nightOn = sel.some((c) => c.night);
-      if ((withMusic && lyricsOn) || nightOn) {
+      // рамка на цели — у ночных клипов на всех киллах, у остальных на киллах через смок (boxTicks)
+      const boxOf = (c) => (c.night ? (c.rawTicks || c.killTicks || []) : (c.boxTicks || []));
+      const boxOn = sel.some((c) => boxOf(c).length);
+      if ((withMusic && lyricsOn) || nightOn || boxOn) {
         setStage(tr("текст песни: углы камеры..."));
         // куда смотрела камера на каждом тике клипов — текст «закрепляется» в мире;
         // для ночных клипов ещё глаз игрока и жертвы перед киллами (рамка на цели)
-        const victims = nightOn ? JSON.stringify(sel.map((c) => (c.night ? (c.rawTicks || c.killTicks || []).map((t, j) => [c.victims?.[j], t]).filter(([v]) => v) : []))) : null;
+        const victims = boxOn ? JSON.stringify(sel.map((c) => {
+          const all = c.rawTicks || c.killTicks || [];
+          return boxOf(c).map((t) => [c.victims?.[all.indexOf(t)], t]).filter(([v]) => v);
+        })) : null;
         // в эдите клипы из разных демок (c.demo) — камеру читаем из каждой демки для её клипов
         const camData = new Array(sel.length);
         for (const dp of new Set(sel.map((c) => c.demo || demoPath0))) {
@@ -873,7 +884,7 @@ const voicePayload = useMemo(() => {
         for (let i = 0; i < sel.length; i++) {
           stopped();
           // в монтаже текст только у интро; у остальных кусков нечего рисовать
-          if (o && !sel[i].night) continue;
+          if (o && !sel[i].night && !boxOf(sel[i]).length) continue;
           const dir = await join(work, `lyr_${i}`);
           const save = (name, bytes) => invoke("save_file", bytes, { headers: { "x-path": encodeURIComponent(`${dir}\\${name}`) } });
           // для стилей «под бит» слова встают на удары трека: находим их в куске под этот клип
@@ -881,14 +892,14 @@ const voicePayload = useMemo(() => {
           const beats = lyricStyle(music.lyricStyle).snap
             ? (await invoke("track_beats", { hlae: paths.hlae, path: music.path, offset: lyricStart, dur: 120 }).catch(() => [])).map((b) => lyricStart + b)
             : [];
-          const nd = sel[i].night && !Array.isArray(camData[i]) ? camData[i] : null;
+          const nd = boxOf(sel[i]).length && !Array.isArray(camData[i]) ? camData[i] : null;
           const list = await renderLyricFrames({
             // в эдите текст в самом куске — только у интро и только со стилем Night (в мире); «Акцент»
             // ложится поверх всего эдита при склейке, а у ночных кусков остаются пыль и рамка
             lrc: lyricsOn && (!o || (o.partLyrics && sel[i].clean)) ? music.lrc : "",
             start: sel[i].musicStart ?? music.start, clip: sel[i], cam: cams[i] || [], slowmo: fxJob.slowmo, drops: sel[i].drops || [], fov, fps,
             W: width, H: height, save, style: o ? "night" : music.lyricStyle, beats, smart: o ? false : music.smartLyrics !== false,
-            night: nd ? { dust: true, eye: nd.eye, targets: nd.targets } : null,
+            night: nd ? { dust: !!sel[i].night, eye: nd.eye, targets: nd.targets } : null,
             onFrame: (f, n) => { stopped(); setStage(tr("текст песни: клип {0}/{1} · {2}%", i + 1, sel.length, Math.round((f / n) * 100))); },
           });
           await save("lyrics.ffconcat", new TextEncoder().encode(list));
@@ -976,7 +987,7 @@ const voicePayload = useMemo(() => {
           {ink && <li className="tabs__ink" aria-hidden="true" style={{ "--x": `${ink.left}px`, width: ink.width }} />}
         </ul>
         <LiveStatus cs2={paths.cs2} rendering={rendering} progress={progress} archiveCount={archive.length}
-          onOpen={(path) => { setTab(0); loadPath(path); }} />
+          onOpen={(path) => { setTab(DEMO_TAB); loadPath(path); }} />
       </nav>
       {/* HLAE и ffmpeg качаются сами, если их нет: показываем, сколько осталось, или ошибку с повтором */}
       {(hlLoad || hlErr || ffLoad || ffErr) && (() => {
@@ -999,9 +1010,12 @@ const voicePayload = useMemo(() => {
         );
       })()}
 
-      {tab === EDIT_TAB ? (
+      {tab === HOME_TAB ? (
+        <Home cs2={paths.cs2} onOpenDemo={openFromArchive}
+          onOpenEdit={(demos) => { setEditPreset({ demos, at: Date.now() }); setTab(EDIT_TAB); }} />
+      ) : tab === EDIT_TAB ? (
         <main className="grid" key={tab}>
-          <NightEdit Frame={Frame} Hint={Hint} archive={archive} cs2={paths.cs2} hlae={paths.hlae} out={paths.out}
+          <NightEdit Frame={Frame} Hint={Hint} archive={archive} preset={editPreset} cs2={paths.cs2} hlae={paths.hlae} out={paths.out}
             music={music} setMusic={setMusic} playerId={playerId} rendering={rendering} progress={progress} stage={stage}
             video={{
               fps, height: res.height, crf: res.crf, gpu: useGpu && gpuEnc ? gpuEnc : null,

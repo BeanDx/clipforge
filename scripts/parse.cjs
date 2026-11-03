@@ -14,6 +14,9 @@ try {
   // Попадания — для оверлея цифр урона. Если событие не распарсилось, просто без них.
   let hurts = [];
   try { hurts = parseEvent(file, "player_hurt", [], []); } catch {}
+  // выстрелы — [тик, steamid]: тап это или спрей (эдит берёт тапы в голову, src/features/edit/montage.js)
+  let fires = [];
+  try { fires = parseEvent(file, "weapon_fire", [], []).map((e) => [e.tick, String(e.user_steamid)]); } catch {}
 
   // Контекст раундов для «умной» оценки моментов (src/moments.js): кто за какую сторону и с какой
   // экипировкой начал раунд, счёт команды игрока — по нему видно, кто выиграл раунд (и клатч).
@@ -38,7 +41,7 @@ try {
     try { defuses = parseEvent(file, "bomb_defused", [], []).map((d) => ({ tick: d.tick, id: String(d.user_steamid) })); } catch {}
   } catch {}
 
-  const json = JSON.stringify({ size: fs.statSync(file).size, events, players, hurts, rounds, defuses },
+  const json = JSON.stringify({ size: fs.statSync(file).size, events, players, hurts, rounds, defuses, fires },
     (_, v) => (typeof v === "bigint" ? v.toString() : v));
   process.stdout.write(json);
 } catch (e) {

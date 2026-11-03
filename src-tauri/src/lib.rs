@@ -1,5 +1,6 @@
 mod ffmpeg;
 mod gallery;
+mod gsi;
 mod hlae;
 mod montage;
 mod music;
@@ -35,6 +36,7 @@ pub fn run() {
       music::locate_hlae,
       music::read_audio,
       music::track_beats,
+      music::track_env,
       music::lyrics_search,
       sky::install_sky,
       skins::scan_items,
@@ -53,7 +55,10 @@ pub fn run() {
       whisper::track_words,
       toast::toast_data,
       toast::toast_close,
-      toast::toast_open
+      toast::toast_open,
+      gsi::gsi_install,
+      gsi::gsi_home,
+      gsi::steam_playtime
     ])
     .setup(|app| {
       // свой Node и скрипты разбора демок лежат в ресурсах установленной программы (scripts/bundle-parser.cjs)
@@ -61,6 +66,8 @@ pub fn run() {
         render::set_parser_dir(dir.join("parser"));
         sky::set_sky_dir(dir.join("sky"));
       }
+      // живые данные из игры: история матчей, закладки хайлайтов, итог сессии (gsi.rs)
+      gsi::start(app.handle().clone());
       if cfg!(debug_assertions) {
         app.handle().plugin(  
           tauri_plugin_log::Builder::default()

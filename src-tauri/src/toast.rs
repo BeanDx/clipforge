@@ -20,6 +20,24 @@ pub struct ToastData {
     pub clips: Vec<ToastClip>,
     pub hlae: String,
     pub out: String,
+    // текстовое уведомление вместо клипа (хайлайты матча, итог сессии, закладка — gsi.rs)
+    pub note: Option<ToastNote>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ToastNote {
+    pub tag: String,
+    pub title: String,
+    pub sub: String,
+    // "home" — кнопка «Открыть» ведёт на главную; пусто — без кнопки
+    pub action: String,
+}
+
+// Окно создаётся через главный поток — из своего потока, чтобы вызывающий (gsi.rs держит замок
+// состояния игры) не ждал его: иначе главный поток, ждущий тот же замок, и создание окна стоят друг за другом
+pub fn note(app: &AppHandle, note: ToastNote) {
+    let app = app.clone();
+    std::thread::spawn(move || open(&app, ToastData { clips: vec![], hlae: String::new(), out: String::new(), note: Some(note) }));
 }
 
 // последнее уведомление: страница окна забирает его сама, когда загрузится (событие могло прийти раньше)
@@ -29,6 +47,10 @@ pub fn show(app: &AppHandle, data: ToastData) {
     if data.clips.is_empty() { return; }
     // кадр-превью лежит в папке клипов — окну уведомления нужен к ней доступ, как вкладке «Хайлайты»
     let _ = app.asset_protocol_scope().allow_directory(&data.out, true);
+    open(app, data);
+}
+
+fn open(app: &AppHandle, data: ToastData) {
     *DATA.lock().unwrap() = Some(data.clone());
     if let Some(win) = app.get_webview_window(LABEL) {
         // уже открыто — просто обновляем содержимое
@@ -82,6 +104,7 @@ pub fn toast_open(app: AppHandle, path: String) {
         let _ = main.show();
         let _ = main.set_focus();
     }
-    let _ = app.emit_to("main", "open-clip", path);
+    // путь клипа или "home" (уведомление из игры: открыть главную)
+    if path == "home" { let _ = app.emit_to("main", "open-home", ()); } else { let _ = app.emit_to("main", "open-clip", path); }
     toast_close(app);
 }

@@ -55,3 +55,11 @@ html.ov-root body:has(.tst) { justify-content: flex-end; align-items: flex-end; 
 .tst-life { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--teal); transform-origin: left; animation: tst-life linear both; }
 .tst.is-paused .tst-life { animation-play-state: paused; }
 @keyframes tst-life { to { transform: scaleX(0); } }
+
+/* текстовое уведомление из игры: значок вместо кадра */
+.tst--note { align-items: center; }
+.tst-badge { flex: none; width: 54px; height: 54px; display: grid; place-items: center; border: 1px solid var(--line); background: radial-gradient(circle at 50% 40%, rgba(46,230,192,.22), transparent 70%), #05080b; }
+.tst-badge i { width: 22px; height: 22px; border: 2px solid var(--yellow); position: relative; animation: tst-pulse 1.6s ease-in-out infinite; }
+.tst-badge i::after { content: ""; position: absolute; inset: 4px; background: var(--teal); }
+.tst-sub--wrap { white-space: normal; line-height: 1.35; }
+@keyframes tst-pulse { 50% { transform: scale(.86) rotate(45deg); } }

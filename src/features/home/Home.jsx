@@ -1,0 +1,352 @@
+// Главная: что сейчас в игре, часы в CS2, история матчей, хайлайты, отмеченные во время игры
+// (src-tauri/src/gsi.rs), итог последней сессии и тренд по демкам (процент в голову, тапы и спреи).
+import { useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { tr, useLang } from "../../i18n";
+import { mapName, mapTint } from "../match/dossier";
+import { editKills } from "../edit/montage";
+import { placeOf, roundless, modeName } from "./place";
+
+const DAY = 86_400_000;
+const WEAPON = (w) => ({ ssg08: "SSG 08", awp: "AWP", ak47: "AK-47", m4a1_silencer: "M4A1-S", m4a1: "M4A4", deagle: "Deagle", usp_silencer: "USP-S", glock: "Glock", "?": "?" }[w] || (w || "").replace(/_/g, " ").toUpperCase());
+const pad = (n) => String(n).padStart(2, "0");
+const dayKey = (t) => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+const hours = (min) => (min >= 600 ? Math.round(min / 60) : Math.round(min / 6) / 10);
+const fmtH = (sec) => (sec >= 3600 ? `${Math.floor(sec / 3600)} ${tr("ч")} ${Math.round((sec % 3600) / 60)} ${tr("мин")}` : `${Math.round(sec / 60)} ${tr("мин")}`);
+const kd = (k, d) => (k / Math.max(1, d)).toFixed(2);
+const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
+function when(t) {
+  const d = new Date(t), now = new Date();
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (dayKey(t) === dayKey(now)) return tr("сегодня {0}", hm);
+  if (dayKey(t) === dayKey(now - DAY)) return tr("вчера {0}", hm);
+  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${hm}`;
+}
+const WD = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
+// итог матча: у режимов без команд (бой насмерть) победы нет — пишем сам режим
+const resultOf = (m) => (m.result === "win" ? tr("победа") : m.result === "loss" ? tr("поражение") : m.result === "draw" ? tr("ничья")
+  : m.finished && roundless(m.mode) ? modeName(m.mode) : m.finished ? "" : tr("вышел"));
+
+// кэш разбора демок для тренда: путь|размер → статистика (разбор ~2 с на демку, второй раз не нужен)
+const STATS_KEY = "cf-home-demo-stats";
+const loadStats = () => { try { return JSON.parse(localStorage.getItem(STATS_KEY)) || {}; } catch { return {}; } };
+
+// скачанная демка, похожая на матч: та же карта и файл появился после матча (в течение 3 дней)
+const demoFor = (m, replays) => replays.find((r) => r.map === m.map && r.modified >= m.started && r.modified - (m.ended || m.started) < 3 * DAY);
+
+export function Home({ cs2, onOpenEdit, onOpenDemo }) {
+  useLang();
+  const [home, setHome] = useState(null); // { history, live }
+  const [pt, setPt] = useState(null); // часы из Steam
+  const [replays, setReplays] = useState([]);
+  const [stats, setStats] = useState(loadStats);
+  const [busy, setBusy] = useState("");
+  const [gsi, setGsi] = useState(null); // null | "ok" | "restart" | "error: ..."
+  const [copied, setCopied] = useState(false);
+
+  const refresh = () => invoke("gsi_home").then(setHome).catch(() => {});
+  useEffect(() => {
+    refresh();
+    invoke("steam_playtime").then(setPt).catch(() => {});
+    const uns = [
+      listen("gsi-update", (e) => setHome((h) => (h ? { ...h, live: e.payload } : h))),
+      listen("gsi-match-end", refresh),
+      listen("gsi-session-end", refresh),
+      listen("gsi-mark", refresh),
+    ];
+    return () => uns.forEach((u) => u.then((f) => f()));
+  }, []);
+  useEffect(() => {
+    if (!cs2) return;
+    invoke("list_replays", { cs2 }).then(setReplays).catch(() => {});
+    // конфиг для игры: если он новый, а игра уже открыта — данные пойдут после перезапуска CS2
+    invoke("gsi_install", { cs2 }).then(async (fresh) => {
+      const running = fresh && await invoke("cs2_running").catch(() => false);
+      setGsi(running ? "restart" : "ok");
+    }).catch((e) => setGsi(`error: ${e}`));
+  }, [cs2]);
+
+  const hist = home?.history || { matches: [], sessions: [], days: {} };
+  const live = home?.live;
+  const matches = useMemo(() => [...hist.matches].sort((a, b) => b.started - a.started), [hist.matches]);
+  const now = Date.now();
+  const week = matches.filter((m) => m.started >= now - 7 * DAY);
+  const wk = week.reduce((a, m) => ({ k: a.k + m.kills, d: a.d + m.deaths, hs: a.hs + m.hs, w: a.w + (m.result === "win") }), { k: 0, d: 0, hs: 0, w: 0 });
+
+  // часы по дням за 14 дней: свои записи (с тех пор как программа открыта во время игры)
+  const days = Array.from({ length: 14 }, (_, i) => {
+    const t = now - (13 - i) * DAY;
+    return { key: dayKey(t), wd: WD[new Date(t).getDay()], sec: hist.days?.[dayKey(t)] || 0 };
+  });
+  const maxSec = Math.max(3600, ...days.map((d) => d.sec));
+  const tracked = days.reduce((s, d) => s + d.sec, 0);
+
+  // последняя сессия
+  const lastS = [...(hist.sessions || [])].sort((a, b) => b.started - a.started)[0];
+  const sm = lastS ? matches.filter((m) => lastS.matches.includes(m.id)) : [];
+  const ss = sm.reduce((a, m) => ({ k: a.k + m.kills, d: a.d + m.deaths, hs: a.hs + m.hs }), { k: 0, d: 0, hs: 0 });
+  const bestRound = sm.flatMap((m) => m.rounds.map((r) => ({ ...r, map: m.map }))).sort((a, b) => b.kills - a.kills || b.hs - a.hs)[0];
+  const guns = {};
+  sm.forEach((m) => Object.entries(m.weapons || {}).forEach(([w, n]) => { guns[w] = (guns[w] || 0) + n; }));
+  const topGun = Object.entries(guns).sort((a, b) => b[1] - a[1])[0];
+
+  // хайлайты из игры по свежим матчам
+  const highlights = matches.flatMap((m) => m.rounds.filter((r) => r.tags?.length).map((r) => ({ m, r, demo: demoFor(m, replays) }))).slice(0, 12);
+
+  // история: матчи из игры + скачанные демки, которых нет среди матчей
+  const linked = new Set(matches.map((m) => demoFor(m, replays)?.path).filter(Boolean));
+  const rows = [
+    ...matches.map((m) => ({ t: m.started, m, demo: demoFor(m, replays) })),
+    ...replays.filter((r) => !linked.has(r.path)).map((r) => ({ t: r.modified, demo: r })),
+  ].sort((a, b) => b.t - a.t).slice(0, 30);
+
+  // тренд по демкам
+  const trend = replays.map((r) => ({ r, s: stats[`${r.path}|${r.size}`] })).filter((x) => x.s).sort((a, b) => a.r.modified - b.r.modified).slice(-12);
+  const tAll = trend.reduce((a, { s }) => ({ k: a.k + s.kills, hs: a.hs + s.hs, tap: a.tap + s.taps, spray: a.spray + s.sprays }), { k: 0, hs: 0, tap: 0, spray: 0 });
+  const toCount = replays.slice(0, 12).filter((r) => !stats[`${r.path}|${r.size}`]);
+  const countDemos = async () => {
+    const me = pt?.steamid || (await invoke("steam_users").catch(() => []))[0];
+    if (!me) return;
+    const next = { ...stats };
+    for (let i = 0; i < toCount.length; i++) {
+      const r = toCount[i];
+      setBusy(tr("разбираю демку {0}/{1}...", i + 1, toCount.length));
+      try {
+        const raw = JSON.parse(await invoke("parse_demo", { path: r.path }));
+        const ks = editKills(raw, me);
+        const deaths = (raw.events || []).filter((d) => String(d.user_steamid) === String(me)).length;
+        next[`${r.path}|${r.size}`] = {
+          kills: ks.length, hs: ks.filter((k) => k.hs).length, deaths,
+          taps: ks.filter((k) => k.shots != null && k.shots <= 2).length, sprays: ks.filter((k) => k.shots >= 5).length,
+        };
+        setStats({ ...next });
+        try { localStorage.setItem(STATS_KEY, JSON.stringify(next)); } catch {}
+      } catch { /* битая демка — пропускаем */ }
+    }
+    setBusy("");
+  };
+
+  const place = placeOf(live);
+  const inGame = live?.connected && live.map && place.kind !== "demo";
+  const myScore = live?.team === "CT" ? [live.score_ct, live.score_t] : [live?.score_t || 0, live?.score_ct || 0];
+  const name = pt?.name || "";
+
+  return (
+    <div className="hm">
+      {/* шапка: привет и что сейчас в игре */}
+      <section className={`hm-hero ${inGame ? "is-live" : ""}`} style={{ "--tint": inGame ? mapTint(live.map) : "#2ee6c0" }}>
+        <div className="hm-hero__bg" aria-hidden="true" />
+        <div className="hm-hero__left">
+          <span className="hm-kicker mono">{inGame ? tr("сейчас в игре") : tr("clipforge · главная")}</span>
+          <h1 className="hm-hello">{name ? tr("Привет, {0}", name) : tr("Привет")}</h1>
+          {live?.connected && (
+            <div className={`hm-place is-${place.kind}`}>
+              <span className="hm-place__badge mono">{place.badge}</span>
+              <div className="hm-place__text">
+                <b>{place.title}</b>
+                {place.sub && <span>{place.sub}</span>}
+              </div>
+            </div>
+          )}
+          {inGame ? (
+            <p className="hm-hero__line">
+              {!roundless(live.mode) && <>{tr("раунд {0}", live.round)} · <b className="mono">{myScore[0]}:{myScore[1]}</b>{" "}· </>}
+              <span className="mono">{live.kills}/{live.deaths}</span> · {tr("{0}% в голову", pct(live.hs, live.kills))}
+            </p>
+          ) : (
+            <p className="hm-hero__line dim">
+              {live?.session_started ? tr("Сессия идёт") : tr("Зайди в CS2 — матчи, хайлайты и часы будут записываться сами")}
+            </p>
+          )}
+          <div className="hm-hero__chips">
+            <span className={`hm-chip ${gsi === "ok" ? "is-ok" : gsi === "restart" ? "is-warn" : ""}`}>
+              <i />{gsi === "restart" ? tr("перезапусти CS2, чтобы включить запись матчей") : gsi?.startsWith("error") ? tr("не получилось подключиться к CS2") : tr("связь с игрой включена")}
+            </span>
+            <span className="hm-chip"><kbd>{live?.mark_key || "F8"}</kbd>{tr("в игре — запомнить момент")}</span>
+            {place.hint && (
+              <button type="button" className="hm-chip is-warn hm-chip--btn" title={tr("Steam → CS2 → Свойства → Параметры запуска: -condebug, потом перезапусти CS2")}
+                onClick={() => { navigator.clipboard?.writeText("-condebug").catch(() => {}); setCopied(true); setTimeout(() => setCopied(false), 2500); }}>
+                <i />{copied ? tr("скопировано: вставь в Steam → CS2 → Свойства → Параметры запуска") : place.hint}
+                {!copied && <kbd>{tr("копировать")}</kbd>}
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="hm-hero__right">
+          {inGame ? (
+            <div className="hm-live">
+              {roundless(live.mode)
+                ? <div className="hm-live__rk"><b>{live.kills}</b><span>{tr("киллов за матч")}</span></div>
+                : <div className="hm-live__rk"><b>{live.round_kills}</b><span>{tr("киллов в раунде")}</span></div>}
+              <div className="hm-live__hl">
+                {live.highlights.length ? live.highlights.slice(-4).map((r) => <em key={r.round}>R{r.round} · {tr(r.tags[0])}</em>) : <span className="dim">{tr("хайлайты матча появятся здесь")}</span>}
+              </div>
+            </div>
+          ) : (
+            <div className="hm-hours">
+              <b>{pt ? hours(pt.two_weeks) : "—"}</b>
+              <span>{tr("часов за 2 недели")}</span>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* цифры */}
+      <section className="hm-tiles">
+        <Tile label={tr("часов за 2 недели")} value={pt ? hours(pt.two_weeks) : "—"} sub={tr("по Steam")} />
+        <Tile label={tr("всего часов в CS2")} value={pt ? Math.round(pt.total / 60).toLocaleString("ru-RU") : "—"} sub={pt?.last_played ? tr("последний раз {0}", when(pt.last_played * 1000)) : ""} />
+        <Tile label={tr("матчей за неделю")} value={week.length} sub={week.length ? tr("{0} побед", wk.w) : tr("пока не записано")} />
+        <Tile label={tr("K/D за неделю")} value={week.length ? kd(wk.k, wk.d) : "—"} sub={week.length ? `${wk.k} / ${wk.d}` : ""} accent />
+        <Tile label={tr("в голову за неделю")} value={week.length ? `${pct(wk.hs, wk.k)}%` : "—"} sub={week.length ? tr("{0} хедшотов", wk.hs) : ""} />
+      </section>
+
+      <div className="hm-grid">
+        {/* часы по дням */}
+        <section className="hm-card hm-days">
+          <header className="hm-card__head"><h2>{tr("Игра по дням")}</h2><span className="mono dim">{tracked ? fmtH(tracked) + " · 14 " + tr("дней") : tr("считаю с сегодняшнего дня")}</span></header>
+          <div className="hm-bars">
+            {days.map((d, i) => (
+              <div key={d.key} className={`hm-bar ${i === 13 ? "is-today" : ""}`} title={`${d.key}: ${fmtH(d.sec)}`}>
+                <i style={{ height: `${Math.max(2, (d.sec / maxSec) * 100)}%`, "--d": `${i * 30}ms` }} />
+                <span>{tr(d.wd)}</span>
+              </div>
+            ))}
+          </div>
+          {!tracked && <p className="hm-note dim">{tr("Часы по дням пишутся, пока программа открыта (можно свернуть). За 2 недели по Steam: {0} ч.", pt ? hours(pt.two_weeks) : "—")}</p>}
+        </section>
+
+        {/* итог последней сессии */}
+        <section className="hm-card hm-session">
+          <header className="hm-card__head"><h2>{tr("Итог сессии")}</h2><span className="mono dim">{lastS ? when(lastS.started) : ""}</span></header>
+          {lastS && sm.length ? (
+            <>
+              <div className="hm-sess">
+                <div><b>{sm.length}</b><span>{tr("матчей")}</span></div>
+                <div><b className="accent">{kd(ss.k, ss.d)}</b><span>K/D</span></div>
+                <div><b>{pct(ss.hs, ss.k)}%</b><span>{tr("в голову")}</span></div>
+                <div><b>{fmtH((lastS.ended - lastS.started) / 1000)}</b><span>{tr("в игре")}</span></div>
+              </div>
+              <ul className="hm-facts">
+                {bestRound && <li><span className="dim">{tr("лучший раунд")}</span><b>{mapName(bestRound.map)} · R{bestRound.round} · {bestRound.kills}K{bestRound.hs === bestRound.kills && bestRound.kills > 1 ? ` · ${tr("все в голову")}` : ""}</b></li>}
+                {topGun && <li><span className="dim">{tr("больше всего киллов")}</span><b>{WEAPON(topGun[0])} · {topGun[1]}</b></li>}
+                {sm.map((m) => <li key={m.id}><span className="dim">{mapName(m.map)}</span><b className={`hm-res is-${m.result || (m.finished ? "none" : "left")}`}>{resultOf(m)} · {m.kills}/{m.deaths}</b></li>)}
+              </ul>
+            </>
+          ) : (
+            <p className="hm-empty">{tr("Когда закроешь CS2, здесь будет итог: матчи, K/D, процент в голову, лучший раунд и любимый ствол. Он же придет уведомлением.")}</p>
+          )}
+        </section>
+
+        {/* хайлайты из игры */}
+        <section className="hm-card hm-hl span-2">
+          <header className="hm-card__head"><h2>{tr("Хайлайты из игры")}</h2><span className="mono dim">{tr("3K, 4K, эйс, все в голову, нож и клавиша {0}", live?.mark_key || "F8")}</span></header>
+          {highlights.length ? (
+            <div className="hm-hl__list">
+              {highlights.map(({ m, r, demo }, i) => (
+                <div key={`${m.id}:${r.round}`} className="hm-hl__item" style={{ "--tint": mapTint(m.map), "--i": i }}>
+                  <span className={`hm-hl__k ${r.kills >= 5 ? "is-ace" : r.kills >= 4 ? "is-4" : ""}`}>{r.kills >= 5 ? "ACE" : r.kills ? `${r.kills}K` : "★"}</span>
+                  <div className="hm-hl__body">
+                    <b>{mapName(m.map)} · R{r.round}</b>
+                    <span>{r.tags.map((t) => tr(t)).join(" · ")}</span>
+                    <span className="mono dim">{when(m.started)}</span>
+                  </div>
+                  {demo
+                    ? <button type="button" className="hm-btn is-go" onClick={() => onOpenEdit([demo.path])}>{tr("в эдит")}</button>
+                    : <span className="hm-hl__wait mono dim">{tr("скачай демку в «Смотреть»")}</span>}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="hm-empty">{tr("Играй как обычно: раунды с 3+ киллами, эйсы, ножи и все хедшоты отметятся сами, а {0} отметит любой момент. Когда демка матча скачается, эти раунды уже будут выбраны в «Эдите».", live?.mark_key || "F8")}</p>
+          )}
+        </section>
+
+        {/* история игр */}
+        <section className="hm-card hm-hist span-2">
+          <header className="hm-card__head"><h2>{tr("История игр")}</h2><span className="mono dim">{tr("{0} матчей · {1} демок", matches.length, replays.length)}</span></header>
+          {rows.length ? (
+            <div className="hm-rows">
+              {rows.map(({ m, demo }) => {
+                const s = demo && stats[`${demo.path}|${demo.size}`];
+                const k = m ? m.kills : s?.kills, d = m ? m.deaths : s?.deaths, hs = m ? m.hs : s?.hs;
+                const hl = m ? m.rounds.filter((r) => r.tags?.length).length : 0;
+                return (
+                  <div key={m?.id || demo.path} className="hm-row" style={{ "--tint": mapTint((m || demo).map) }}>
+                    <span className="hm-row__map"><i />{mapName((m || demo).map) || "demo"}</span>
+                    <span className="mono dim hm-row__when">{when(m ? m.started : demo.modified)}</span>
+                    <span className={`hm-res is-${m?.result || (m && !m.finished ? "left" : "none")}`}>
+                      {m ? (resultOf(m)) : tr("демка")}
+                      {m && (m.score_ct || m.score_t) ? <b className="mono"> {m.team === "CT" ? `${m.score_ct}:${m.score_t}` : `${m.score_t}:${m.score_ct}`}</b> : null}
+                    </span>
+                    <span className="mono hm-row__kd">{k != null ? `${k}/${d ?? "?"}` : "—"}<em>{k ? ` ${pct(hs, k)}% HS` : ""}</em></span>
+                    <span className="hm-row__hl">{hl ? <em>★ {hl}</em> : null}{s?.taps ? <em className="is-tap">{tr("тапов {0}", s.taps)}</em> : null}</span>
+                    <span className="hm-row__act">
+                      {demo ? <button type="button" className="hm-btn" onClick={() => onOpenDemo(demo.path)}>{tr("открыть")}</button> : <span className="mono dim">{tr("нет демки")}</span>}
+                      {demo && <button type="button" className="hm-btn is-go" onClick={() => onOpenEdit([demo.path])}>{tr("в эдит")}</button>}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="hm-empty">{tr("Пока пусто: сыграй матч или скачай демку в CS2 (Смотреть → Ваши матчи).")}</p>
+          )}
+        </section>
+
+        {/* тренд по демкам */}
+        <section className="hm-card hm-trend span-2">
+          <header className="hm-card__head">
+            <h2>{tr("Как стреляешь")}</h2>
+            <span className="mono dim">{trend.length ? tr("по {0} демкам", trend.length) : tr("по скачанным демкам")}</span>
+          </header>
+          <div className="hm-trend__row">
+            <div className="hm-trend__nums">
+              <div><b>{tAll.k ? `${pct(tAll.hs, tAll.k)}%` : "—"}</b><span>{tr("в голову")}</span></div>
+              <div><b className="accent">{tAll.k ? `${pct(tAll.tap, tAll.k)}%` : "—"}</b><span>{tr("тапы (1–2 пули)")}</span></div>
+              <div><b>{tAll.k ? `${pct(tAll.spray, tAll.k)}%` : "—"}</b><span>{tr("спреи (5+ пуль)")}</span></div>
+            </div>
+            {trend.length > 1 ? (
+              <Spark points={trend.map(({ s }) => [pct(s.hs, s.kills), pct(s.taps, s.kills)])} />
+            ) : (
+              <p className="hm-empty">{tr("Посчитаю по твоим демкам, сколько киллов в голову и сколько из них тапы, а сколько спреи. Это ~2 секунды на демку, один раз.")}</p>
+            )}
+          </div>
+          {toCount.length > 0 && (
+            <button type="button" className="hm-btn is-go hm-trend__go" disabled={!!busy} onClick={countDemos}>
+              {busy || tr("посчитать по {0} демкам", toCount.length)}
+            </button>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function Tile({ label, value, sub, accent }) {
+  return (
+    <div className={`hm-tile ${accent ? "is-accent" : ""}`}>
+      <span className="hm-tile__label mono">{label}</span>
+      <b className="hm-tile__value">{value}</b>
+      <span className="hm-tile__sub dim">{sub}</span>
+    </div>
+  );
+}
+
+// две линии по матчам: процент в голову и доля тапов
+function Spark({ points }) {
+  const W = 420, H = 110, n = points.length;
+  const xy = (i, v) => [8 + (i * (W - 16)) / Math.max(1, n - 1), H - 10 - (v / 100) * (H - 22)];
+  const line = (j) => points.map((p, i) => xy(i, p[j]).map((x) => x.toFixed(1)).join(",")).join(" ");
+  return (
+    <svg className="hm-spark" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={tr("в голову и тапы по матчам")}>
+      {[25, 50, 75].map((g) => <line key={g} x1="0" x2={W} y1={xy(0, g)[1]} y2={xy(0, g)[1]} className="hm-spark__grid" />)}
+      <polyline points={line(0)} className="hm-spark__hs" />
+      <polyline points={line(1)} className="hm-spark__tap" />
+      {points.map((p, i) => <circle key={i} cx={xy(i, p[1])[0]} cy={xy(i, p[1])[1]} r="3" className="hm-spark__dot" />)}
+      <text x={W - 4} y="12" textAnchor="end" className="hm-spark__lbl">
+        <tspan className="hm-spark__lbl--hs">{tr("в голову")}</tspan>  <tspan className="hm-spark__lbl--tap">{tr("тапы")}</tspan>
+      </text>
+    </svg>
+  );
+}

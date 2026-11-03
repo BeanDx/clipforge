@@ -5,6 +5,7 @@ import App from "./App";
 import Overlay from "./windows/overlay/Overlay";
 import Toast from "./windows/toast/Toast";
 import { installNativeGuards } from "./lib/nativeGuards";
+import { installIdle } from "./lib/idle";
 import "./index.css";
 
 installNativeGuards();
@@ -13,6 +14,8 @@ installNativeGuards();
 // и уведомление «хайлайт готов» ("toast")
 let label = "main";
 try { label = getCurrentWindow().label; } catch { /* не в Tauri */ }
+// главное окно без фокуса не анимируется (уведомлению и подсказке поверх игры анимации нужны)
+if (label === "main") installIdle();
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>

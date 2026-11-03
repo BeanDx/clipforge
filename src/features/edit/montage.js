@@ -15,6 +15,14 @@ const wname = (w) => String(w || "").replace(/^weapon_/, "");
 export function editKills(raw, steamid) {
   const id = String(steamid);
   const startOf = new Map((raw.rounds || []).filter((r) => r.round != null).map((r) => [r.round, r.start]));
+  // свои выстрелы: сколько пуль ушло за 0.6 с до килла (1–2 — тап, 5+ — спрей)
+  const mine = (raw.fires || []).filter((f) => f[1] === id).map((f) => Number(f[0])).sort((a, b) => a - b);
+  const shotsBefore = (tick) => {
+    if (!raw.fires) return null;
+    let n = 0;
+    for (let i = mine.length - 1; i >= 0 && mine[i] >= tick - 0.6 * TICK; i--) if (mine[i] <= tick) n++;
+    return n;
+  };
   return (raw.events || [])
     .filter((d) => String(d.attacker_steamid) === id && String(d.user_steamid) !== id
       && (d.attacker_team_num == null || d.attacker_team_num !== d.user_team_num)
@@ -23,7 +31,7 @@ export function editKills(raw, steamid) {
       tick: Number(d.tick), round: Number(d.total_rounds_played) + 1, victim: String(d.user_steamid),
       weapon: wname(d.weapon), hs: !!d.headshot, noscope: !!d.noscope && SNIPER.test(wname(d.weapon)),
       wall: Number(d.penetrated) > 0, smoke: !!d.thrusmoke, air: !!d.attackerinair, blind: !!d.attackerblind,
-      dist: Number(d.distance) || 0,
+      dist: Number(d.distance) || 0, shots: shotsBefore(Number(d.tick)),
     }))
     .sort((a, b) => a.tick - b.tick);
 }
@@ -56,6 +64,9 @@ export function scoreKill(k) {
   const tags = [];
   const add = (pts, tag) => { s += pts; if (tag) tags.push(tag); };
   if (k.hs) add(14, "HS");
+  // в эдите смотрится тап в голову: пуля сразу в голову, без спрея и доводки прицела
+  if (k.shots != null && k.shots <= 2 && !KNIFE.test(k.weapon)) add(14, "тап");
+  else if (k.shots >= 5) add(-14);
   if (SNIPER.test(k.weapon)) add(12, k.weapon === "ssg08" ? "SSG" : "AWP");
   if (k.weapon === "ssg08" && k.air) add(10, "прыжок SSG");
   else if (k.air) add(8, "в прыжке");
@@ -64,7 +75,7 @@ export function scoreKill(k) {
   else if (k.flick >= 500) add(20, "флик");
   else if (k.flick >= 250) add(10, "доводка");
   if (k.wall) add(8, "прострел");
-  if (k.smoke) add(6, "через смок");
+  if (k.smoke) add(16, "через смок"); // в эдите на нём рамка на противнике
   if (k.blind) add(8, "ослепленным");
   if (KNIFE.test(k.weapon)) add(25, "нож");
   if (k.dist >= 35) add(4, `${Math.round(k.dist)} м`);
@@ -112,11 +123,17 @@ export function clipOf(g, { steamid, name, slot, intro, night = !!intro }) {
     start: Math.max(0, Math.round(ticks[0] - lead * TICK)), end: Math.round(ticks.at(-1) + tail * TICK),
     killTicks: ticks, rawTicks: ticks, victims: g.kills.map((k) => k.victim),
     hsTicks: g.kills.filter((k) => k.hs).map((k) => k.tick), hits: [], night: !!night, clean: !!intro,
+    // киллы через смок: на них светящаяся рамка на противнике, как ВХ (nightfx.js, drawTargets)
+    boxTicks: g.kills.filter((k) => k.smoke).map((k) => k.tick),
   };
 }
 
 // длительность куска и секунды киллов в нём (без slow-mo и повторов — как рендерит эдит)
-export const partInfo = (c) => ({ dur: (c.end - c.start) / TICK, kills: c.killTicks.map((t) => (t - c.start) / TICK) });
+// box — киллы с рамкой на цели (через смок): им нужен заход до выстрела, чтобы рамка была видна
+export const partInfo = (c) => ({
+  dur: (c.end - c.start) / TICK, kills: c.killTicks.map((t) => (t - c.start) / TICK),
+  box: (c.boxTicks || []).map((t) => (t - c.start) / TICK),
+});
 
 // Ровная сетка ударов по найденным: средний интервал (приведённый к 0.35..0.75 с, то есть
 // 80..170 BPM) и сдвиг, при котором найденные удары ближе всего к сетке. Детектор пропускает
@@ -142,23 +159,29 @@ export function beatGrid(beats) {
 // замедляется до начала такта — там дроп. Дальше склейка ровно на удар, выстрел сразу за ней,
 // кусок держится 2 удара; киллы мультикилла — каждый на свой удар. Слабые одиночные киллы
 // (если моментов много) идут чёрно-белой очередью по полудару посередине. Вспышки цвета:
-// красная на первом килле после дропа, розовая после очереди.
+// нет (красная на дропе и розовая после очереди слишком резали глаз).
 // parts — { path, dur, kills, intro, score }; возвращает куски (gray — чёрно-белый), склейки,
 // удары зума, вспышки { t, color } и общую длину.
 // opts.dropAt — секунда дропа (начало припева от начала трека в эдите): интро подгоняется под неё.
+// opts.grid — сетка из разбора всего трека (rhythm.js, gridFrom): точный темп и громкость каждого
+// удара; без неё сетка строится по найденным ударам куска.
 export function planRhythm(parts, beats, opts = {}) {
-  const { P, at, index } = beatGrid(beats);
+  const grid = opts.grid || beatGrid(beats);
+  const { P, at, index } = grid;
   // ударов на килл — чтобы кусок был около секунды, как в референсе (126 BPM — 2 удара, 92 BPM — 1)
   const per = Math.max(1, Math.round(0.95 / P));
-  const PRE = 0.05; // выстрел чуть после склейки: склейка на ударе, вспышка выстрела — следом
+  // громкая часть трека (припев, крик) — киллы подряд, по одному на удар
+  const perAt = (kb) => (per > 1 && P >= 0.45 && (grid.energyAt?.(kb) ?? 0) >= 0.6 ? 1 : per);
+  const PRE = 0.03; // выстрел сразу после склейки: склейка на ударе, попадание — следом
   const segments = [], whips = [], punches = [], flashes = [];
+  const boxes = []; // [от, до] на шкале эдита: рамка на цели через смок, текст в это время не рисуется
   let T = 0, k = 0; // k — номер удара, на котором сейчас стоит склейка
   const intro = parts.find((p) => p.intro);
   let rest = parts.filter((p) => !p.intro && p.kills.length);
-  // очередь: до 6 самых слабых одиночных киллов, если моментов от 8
+  // очередь: до 8 самых слабых одиночных киллов, если моментов от 8
   const singles = rest.filter((p) => p.kills.length === 1).sort((a, b) => (a.score || 0) - (b.score || 0));
   // очередь имеет смысл от трёх кусков; пару одиночных оставляем обычными
-  const burstN = Math.min(6, singles.length - 2);
+  const burstN = Math.min(8, singles.length - 2);
   const burst = rest.length >= 8 && burstN >= 3 ? singles.slice(0, burstN) : [];
   rest = rest.filter((p) => !burst.includes(p));
   if (intro && opts.dropAt != null) {
@@ -192,52 +215,81 @@ export function planRhythm(parts, beats, opts = {}) {
     k = Math.max(0, index(0.2));
     T = at(k);
   }
-  const place = (p, beatsLong, gray) => {
-    const k0 = p.kills[0];
-    let kb = k; // удар первого килла (склейка на нём же)
-    segments.push({ path: p.path, from: Math.max(0, k0 - PRE), to: k0, speed: 1, gray });
-    punches.push(at(kb) + PRE);
-    let outT = at(kb) + PRE;
-    // следующие киллы — на ближайший подходящий удар, промежуток подгоняется скоростью (0.6..1.7)
-    for (let j = 1; j < p.kills.length; j++) {
-      const g = p.kills[j] - p.kills[j - 1];
-      // киллы далеко друг от друга (дольше ~2.5 ударов) — середину вырезаем: удар после первого,
-      // склейка, и следующий килл сразу на следующем ударе, как отдельный кусок
-      if (g > 2.5 * P) {
-        const hold = at(kb + 1) - outT;
-        segments.push({ path: p.path, from: p.kills[j - 1], to: p.kills[j - 1] + hold, speed: 1, gray });
-        kb += 1;
-        segments.push({ path: p.path, from: Math.max(0, p.kills[j] - PRE), to: p.kills[j], speed: 1, gray });
-        outT = at(kb) + PRE;
-        punches.push(outT);
-        continue;
-      }
-      // удар, при котором скорость ближе всего к настоящей (реже ускоряем и замедляем)
-      let nb = kb + 1, bestErr = Infinity;
-      for (let c = kb + 1; c <= kb + 8; c++) {
-        const r = g / (at(c) + PRE - outT);
-        if (r < 0.6) break;
-        if (r <= 1.7 && Math.abs(Math.log(r)) < bestErr) { bestErr = Math.abs(Math.log(r)); nb = c; }
-      }
-      const sp = Math.min(1.7, Math.max(0.6, g / (at(nb) + PRE - outT)));
-      segments.push({ path: p.path, from: p.kills[j - 1], to: p.kills[j], speed: sp, gray });
-      outT += g / sp;
-      kb = nb;
-      punches.push(outT);
-    }
-    // хвост до склейки через beatsLong ударов после последнего килла
-    const end = at(kb + beatsLong);
-    const tail = end - outT, left = p.dur - p.kills.at(-1);
-    const sp = left >= tail ? 1 : Math.max(0.05, left) / tail;
-    segments.push({ path: p.path, from: p.kills.at(-1), to: p.kills.at(-1) + tail * sp, speed: sp, gray });
-    k = kb + beatsLong;
+  // Один килл — один кусок (как в референсе: в голову, в голову, в голову): склейка на ударе,
+  // выстрел сразу за ней, дальше попадание и падение до следующей склейки через beatsLong ударов.
+  // Доводка прицела до следующего килла не показывается — следующий килл мультикилла идёт
+  // своим куском на следующем ударе. next — время следующего килла в том же куске (если есть):
+  // до него хвост не доходит, при нехватке записи хвост замедляется.
+  const shot = (p, kt, next, beatsLong, gray) => {
+    // килл через смок: склейка на удар раньше — сначала рамка садится на противника, выстрел на следующем ударе
+    const lead = p.box?.some((b) => Math.abs(b - kt) < 0.02) && kt > P + PRE ? 1 : 0;
+    if (lead) { boxes.push([at(k), at(k + lead) + PRE + 0.45]); k += lead; }
+    const t0 = at(k), end = at(k + beatsLong);
+    segments.push({ path: p.path, from: Math.max(0, kt - PRE - lead * P), to: kt, speed: 1, gray });
+    punches.push(t0 + PRE);
+    const tail = end - t0 - PRE;
+    const left = Math.max(0.04, (next != null ? next - PRE - 0.02 : p.dur) - kt);
+    const sp = left >= tail ? 1 : Math.max(0.25, left / tail);
+    segments.push({ path: p.path, from: kt, to: kt + tail * sp, speed: sp, gray });
+    k += beatsLong;
     T = end;
+  };
+  // Там, где трек или текст стихает (и в конце эдита) — плавное слоу-мо с перемоткой: килл, время
+  // замедляется, мягко отматывается назад (кадры задом наперёд: медленно — быстрее — медленно)
+  // и тот же килл идёт ещё раз совсем медленно до склейки
+  const slowShot = (p, kt, beatsLong) => {
+    const t0 = at(k), end = at(k + beatsLong);
+    const seg = (from, to, speed, reverse = false) => {
+      segments.push({ path: p.path, from: Math.max(0, from), to, speed, reverse });
+      return (to - Math.max(0, from)) / speed;
+    };
+    let t = t0;
+    t += seg(kt - PRE, kt + 0.1, 1);
+    punches.push(t0 + PRE);
+    t += seg(kt + 0.1, kt + 0.16, 0.7);
+    t += seg(kt + 0.16, kt + 0.22, 0.5);
+    // перемотка назад: от kt + 0.22 до kt − 0.12, с разгоном и торможением
+    t += seg(kt + 0.12, kt + 0.22, 0.6, true);
+    t += seg(kt, kt + 0.12, 1, true);
+    t += seg(kt - 0.12, kt, 0.6, true);
+    // повтор килла: 0.35 и до конца
+    const from = Math.max(0, kt - 0.12);
+    const need = Math.max(0.05, end - t);
+    const sp = Math.min(0.35, Math.max(0.25, (p.dur - from) / need));
+    punches.push(t + (kt - from) / sp);
+    segments.push({ path: p.path, from, to: from + need * sp, speed: sp });
+    k += beatsLong;
+    T = end;
+  };
+  // трек стихает: впереди 4 удара заметно тише, чем 4 удара до этого, или пауза в тексте (opts.quiet —
+  // секунды эдита, где строка допета, а следующая ещё не началась)
+  const avgE = (a) => [0, 1, 2, 3].reduce((s, d) => s + grid.energyAt(a + d), 0) / 4;
+  const quietAt = (kb) => {
+    const ahead = kb + perAt(kb);
+    if (grid.energyAt && avgE(kb - 3) >= 0.5 && avgE(ahead) <= avgE(kb - 3) - 0.22) return true;
+    return (opts.quiet || []).some((q) => q >= at(kb) && q < at(kb + 3));
+  };
+  let lastSlow = -Infinity, k0 = null; // k0 — удар дропа (первого килла после интро)
+  const place = (p, isLast) => {
+    k0 ??= k;
+    const ks = p.kills;
+    for (let j = 0; j < ks.length; j++) {
+      // килл почти вплотную за предыдущим (двойной за 0.2 с) — в том же куске, без своей склейки
+      let n = j;
+      while (n + 1 < ks.length && ks[n + 1] - ks[n] < 0.22) n++;
+      const next = ks[n + 1];
+      for (let q = j + 1; q <= n; q++) punches.push(at(k) + PRE + (ks[q] - ks[j]));
+      const lastKill = isLast && n === ks.length - 1;
+      if (lastKill) slowShot(p, ks[j], 4);
+      else if (k - lastSlow >= 12 && k - k0 >= 6 && quietAt(k)) { lastSlow = k; slowShot(p, ks[j], 3); }
+      else shot(p, ks[j], next, perAt(k), false);
+      j = n;
+    }
   };
   const before = Math.ceil(rest.length / 3); // очередь — после первой трети
   rest.forEach((p, i) => {
-    if (i === 0 && intro) flashes.push({ t: at(k) + PRE, color: "red" });
     if (i === before && burst.length) {
-      // очередь: по полудару, чёрно-белая; склейки жёсткие
+      // очередь: по полудару, чёрно-белая; склейки жёсткие, в кадре только попадание
       for (const b of burst) {
         const kk = b.kills[0];
         const half = P / 2;
@@ -248,11 +300,10 @@ export function planRhythm(parts, beats, opts = {}) {
       k = index(T);
       const pad = at(k) - T;
       if (pad > 0.01) { const last = segments.at(-1); last.to += pad; T = at(k); }
-      flashes.push({ t: T, color: "pink" });
     }
-    place(p, i === rest.length - 1 ? 4 : per, false);
+    place(p, i === rest.length - 1);
   });
-  return { segments, whips, punches, flashes, total: T, beat: P };
+  return { segments, whips, punches, flashes, boxes, total: T, beat: P };
 }
 
 // План монтажа. parts — по порядку: { path, dur, kills: [секунды в куске], intro }.

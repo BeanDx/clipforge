@@ -2,6 +2,9 @@
 // по клику — список матчей, которые CS2 скачал в game\csgo\replays, открываются одним кликом.
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { placeOf, roundless } from "../features/home/place";
+import { useIdle } from "../lib/idle";
 import { mapName } from "../features/match/dossier";
 import { tr } from "../i18n";
 
@@ -23,7 +26,7 @@ function ago(ms) {
 }
 
 // печатает строку по буквам, держит, стирает и берет следующую
-function useTyper(lines, hold = 4500) {
+function useTyper(lines, hold = 4500, paused = false) {
   const [i, setI] = useState(0);
   const [n, setN] = useState(0);
   const [phase, setPhase] = useState("type");
@@ -36,6 +39,8 @@ function useTyper(lines, hold = 4500) {
     prev.current = key;
   }, [key, line.live]);
   useEffect(() => {
+    // окно не в фокусе — строка замирает как есть (не тратим процессор, пока ты в игре)
+    if (paused) return;
     let t;
     if (phase === "type") {
       if (n < key.length) t = setTimeout(() => setN(n + 1), 28);
@@ -43,7 +48,7 @@ function useTyper(lines, hold = 4500) {
     } else if (n > 0) t = setTimeout(() => setN(n - 1), 12);
     else { setI((x) => (x + 1) % lines.length); setPhase("type"); }
     return () => clearTimeout(t);
-  }, [n, phase, key, lines.length, hold]);
+  }, [n, phase, key, lines.length, hold, paused]);
   return { line, text: key.slice(0, n), done: phase === "type" && n >= key.length };
 }
 
@@ -52,7 +57,14 @@ export function LiveStatus({ cs2, rendering, progress, archiveCount, onOpen }) {
   const [replays, setReplays] = useState([]);
   const [seen, setSeen] = useState(readSeen);
   const [open, setOpen] = useState(false);
+  const [game, setGame] = useState(null); // что сейчас в игре (gsi.rs)
   const box = useRef(null);
+
+  useEffect(() => {
+    invoke("gsi_home").then((h) => setGame(h.live)).catch(() => {});
+    const un = listen("gsi-update", (e) => setGame(e.payload));
+    return () => { un.then((f) => f()); };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -84,6 +96,12 @@ export function LiveStatus({ cs2, rendering, progress, archiveCount, onOpen }) {
   const lines = rendering
     ? [{ text: tr("запись · {0}%", Math.floor(progress)), kind: "rec", live: true }]
     : [
+        // где ты: сервер, режим, карта, счёт — обновляется на лету, без перепечатки
+        ...(game?.connected && game.map ? [(() => {
+          const pl = placeOf(game);
+          const score = game.team === "CT" ? `${game.score_ct}:${game.score_t}` : `${game.score_t}:${game.score_ct}`;
+          return { text: [pl.title, pl.kind === "community" ? pl.sub : "", pl.kind === "demo" ? "" : roundless(game.mode) ? `${game.kills}/${game.deaths}` : score].filter(Boolean).join(" · "), kind: "run", live: true };
+        })()] : []),
         ...fresh.slice(0, 1).map((r) => ({ text: tr("новый матч: {0} · открыть", mapName(r.map) || "demo"), kind: "new" })),
         { text: running ? tr("CS2 запущен") : tr("CS2 готов к записи"), kind: running ? "run" : "ok" },
         replays.length
@@ -92,7 +110,8 @@ export function LiveStatus({ cs2, rendering, progress, archiveCount, onOpen }) {
         ...(archiveCount ? [{ text: tr("демок в архиве: {0}", archiveCount), kind: "ok" }] : []),
         { text: tr(TIPS[Math.floor(Date.now() / 600000) % TIPS.length]), kind: "tip" },
       ];
-  const { line, text, done } = useTyper(lines);
+  const idle = useIdle();
+  const { line, text, done } = useTyper(lines, 4500, idle);
 
   const toggle = () => { setOpen((o) => !o); markSeen(); };
   const pick = (path) => { setOpen(false); markSeen(); onOpen(path); };

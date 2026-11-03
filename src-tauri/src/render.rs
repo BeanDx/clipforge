@@ -914,7 +914,7 @@ fn takes(dir: &Path) -> Vec<PathBuf> {
     v
 }
 
-fn process_running(image: &str) -> bool {
+pub(crate) fn process_running(image: &str) -> bool {
     let mut cmd = Command::new("tasklist");
     cmd.args(["/FI", &format!("IMAGENAME eq {image}"), "/NH", "/FO", "CSV"]);
     no_window(&mut cmd);
@@ -984,7 +984,7 @@ fn kill_cs2() -> bool {
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
 #[tauri::command]
-pub fn cs2_running() -> bool {
+pub async fn cs2_running() -> bool {
     process_running("cs2.exe")
 }
 
@@ -1502,7 +1502,7 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
         let _ = app.emit("render-progress", 100.0_f32);
         let _ = app.emit("render-done", out.to_string_lossy().to_string());
         // уведомление в углу экрана: ты мог свернуть игру и уйти — клипы готовы
-        crate::toast::show(&app, crate::toast::ToastData { clips: done_clips, hlae: job.hlae.clone(), out: job.out.clone() });
+        crate::toast::show(&app, crate::toast::ToastData { clips: done_clips, hlae: job.hlae.clone(), out: job.out.clone(), note: None });
     });
     Ok(())
 }

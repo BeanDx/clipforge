@@ -44,6 +44,13 @@ export default function Toast() {
   }, []);
 
   const clip = data?.clips?.length ? parseName({ ...data.clips[data.clips.length - 1], modified: Date.now() }) : null;
+  // текстовое уведомление из игры (хайлайты матча, итог сессии, закладка) — src-tauri/src/gsi.rs
+  const note = !clip ? data?.note : null;
+  const key = clip?.path || (note ? note.title + note.sub : null);
+  useEffect(() => {
+    if (!note) return;
+    if (rang.current !== key) { rang.current = key; chime(); }
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!clip) return;
     if (rang.current !== clip.path) { rang.current = clip.path; chime(); }
@@ -53,15 +60,35 @@ export default function Toast() {
   const close = () => { setLeaving(true); setTimeout(() => invoke("toast_close"), 280); };
   // обратный отсчёт: стоит, пока курсор над уведомлением
   useEffect(() => {
-    if (!clip || paused || leaving) return;
+    if (!key || paused || leaving) return;
     const t0 = Date.now();
     const id = setInterval(() => {
       const rest = left.current - (Date.now() - t0);
       if (rest <= 0) { clearInterval(id); left.current = 0; close(); }
     }, 100);
     return () => { clearInterval(id); left.current = Math.max(0, left.current - (Date.now() - t0)); };
-  }, [clip?.path, paused, leaving]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [key, paused, leaving]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  if (note) {
+    return (
+      <div className={`tst tst--note ${leaving ? "is-leaving" : ""} ${paused ? "is-paused" : ""}`}
+        onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}>
+        <button type="button" className="tst-x" onClick={close} aria-label={tr("Закрыть")} />
+        <div className="tst-badge" aria-hidden="true"><i /></div>
+        <div className="tst-body">
+          <span className="tst-tag">{tr(note.tag)}</span>
+          <b className="tst-title">{note.title}</b>
+          <span className="tst-sub tst-sub--wrap">{note.sub}</span>
+          {note.action && (
+            <div className="tst-acts">
+              <button type="button" className="tst-go" onClick={() => invoke("toast_open", { path: note.action })}>{tr("Открыть")}</button>
+            </div>
+          )}
+        </div>
+        <span className="tst-life" key={key} style={{ animationDuration: `${LIFE}ms` }} />
+      </div>
+    );
+  }
   if (!clip) return null;
   const n = data.clips.length;
   return (

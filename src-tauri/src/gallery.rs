@@ -165,26 +165,41 @@ pub fn demo_header(path: String) -> String {
     demo_map(Path::new(&path))
 }
 
+// Значение из реестра Windows (reg query): всё после типа значения («SteamPath  REG_SZ  c:/program files (x86)/steam»)
+pub(crate) fn reg(key: &str, val: &str) -> Option<String> {
+    let mut cmd = Command::new("reg");
+    cmd.args(["query", key, "/v", val]);
+    crate::render::no_window(&mut cmd);
+    let out = String::from_utf8_lossy(&cmd.output().ok()?.stdout).to_string();
+    let line = out.lines().find(|l| l.contains(val))?;
+    let at = line.find("REG_")?;
+    let rest = &line[at..];
+    let v = rest[rest.find(char::is_whitespace)?..].trim();
+    (!v.is_empty()).then(|| v.to_string())
+}
+
+// Папка Steam
+pub(crate) fn steam_root() -> String {
+    reg(r"HKCU\Software\Valve\Steam", "SteamPath").unwrap_or_else(|| r"C:\Program Files (x86)\Steam".into())
+}
+
 // Аккаунты Steam этого компа (SteamID64): сначала тот, что сейчас запущен (реестр ActiveUser),
 // потом остальные из loginusers.vdf. По ним «Эдит» узнаёт, кто ты, среди игроков демок — в пати
 // с другом общих игроков несколько, и «у кого больше киллов» брал не того.
 #[tauri::command]
-pub fn steam_users() -> Vec<String> {
-    let reg = |key: &str, val: &str| -> Option<String> {
-        let mut cmd = Command::new("reg");
-        cmd.args(["query", key, "/v", val]);
-        crate::render::no_window(&mut cmd);
-        let out = String::from_utf8_lossy(&cmd.output().ok()?.stdout).to_string();
-        out.lines().find(|l| l.contains(val))?.split_whitespace().last().map(str::to_string)
-    };
+pub async fn steam_users() -> Vec<String> {
+    steam_ids()
+}
+
+// то же без команды — для других модулей (gsi.rs)
+pub(crate) fn steam_ids() -> Vec<String> {
     let mut ids: Vec<String> = Vec::new();
     if let Some(hex) = reg(r"HKCU\Software\Valve\Steam\ActiveProcess", "ActiveUser") {
         if let Ok(acc) = u64::from_str_radix(hex.trim_start_matches("0x"), 16) {
             if acc > 0 { ids.push((76561197960265728u64 + acc).to_string()); }
         }
     }
-    let root = reg(r"HKCU\Software\Valve\Steam", "SteamPath").unwrap_or_else(|| r"C:\Program Files (x86)\Steam".into());
-    if let Ok(vdf) = fs::read_to_string(Path::new(&root).join("config").join("loginusers.vdf")) {
+    if let Ok(vdf) = fs::read_to_string(Path::new(&steam_root()).join("config").join("loginusers.vdf")) {
         for l in vdf.lines() {
             let t = l.trim().trim_matches('"');
             if t.len() == 17 && t.starts_with("7656") && t.chars().all(|c| c.is_ascii_digit()) && !ids.iter().any(|x| x == t) {
