@@ -146,6 +146,16 @@ CS2 is started through HLAE with <code>-insecure</code>, which means VAC is off 
 </details>
 
 <details>
+<summary><b>Does it lower my FPS if I keep it open while playing?</b></summary>
+<br>
+Barely. Same spot on the map, the CS2 FPS counter, left with clipforge closed, right with it open:
+<br><br>
+<img src="docs/screenshots/fps-en.webp" alt="FPS without and with clipforge open" width="100%">
+<br>
+1005 vs 977 average FPS, about 3%, which is within normal run-to-run variance. While the game is in focus, clipforge pauses all its animations and uses about 0% CPU and ~270 MB of RAM.
+</details>
+
+<details>
 <summary><b>Do I need a FACEIT API key?</b></summary>
 <br>
 No. It's only used to show FACEIT levels and Elo in Match stats. Everything else works without it.
