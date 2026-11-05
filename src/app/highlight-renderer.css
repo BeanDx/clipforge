@@ -280,6 +280,8 @@
 .about { display: flex; flex-direction: column; gap: 10px; }
 .about__row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .about__row:last-child { border-bottom: 0; }
+.about__row { align-items: center; }
+.about__ver { display: flex; align-items: center; gap: 10px; }
 
 .launch__btns { display: flex; gap: 10px; align-items: stretch; }
 .go--reuse { height: 48px; margin: 0; display: flex; flex-direction: column; justify-content: center; line-height: 1.1; }
@@ -1495,6 +1497,10 @@
 .hm-btn.is-go { background: var(--yellow) !important; border-color: var(--yellow) !important; color: #07090d; }
 .hm-btn.is-go:hover { box-shadow: 0 0 16px rgba(245,197,24,.4); color: #07090d; }
 .hm-btn:disabled { opacity: .6; cursor: default; transform: none; }
+.hm-btn.is-wait { border-color: var(--teal) !important; color: var(--teal); animation: hm-wait 1.2s ease-in-out infinite; }
+@keyframes hm-wait { 50% { opacity: .55; } }
+.hm-fc { font-size: .62rem; font-style: normal; font-weight: 700; padding: 1px 5px; color: #ff5500; border: 1px solid rgba(255,85,0,.5); }
+.hm-err { color: #ff6b6b; }
 
 .hm-rows { display: flex; flex-direction: column; }
 .hm-row { display: grid; grid-template-columns: 150px 120px 1fr 120px 150px auto; align-items: center; gap: 12px; padding: 10px 6px; border-bottom: 1px solid var(--line); transition: background-color .15s; }

@@ -44,5 +44,12 @@
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZGMDFFMUIxMTJBOUJFMEIKUldRTHZxa1NzZUVCYjRPUzBWYzR4UnBQMmVGcWdoRFdxdVNUSVpsVXA0VGxMdGJRdDV0R1o1cEQK",
+      "endpoints": ["https://github.com/BeanDx/clipforge/releases/latest/download/latest.json"],
+      "windows": { "installMode": "passive" }
+    }
   }
 }

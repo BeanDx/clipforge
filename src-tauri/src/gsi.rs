@@ -651,7 +651,7 @@ pub struct Playtime {
 }
 
 // ник аккаунта из loginusers.vdf: блок "<steamid>" { ... "PersonaName" "..." }
-fn persona(root: &str, id: &str) -> String {
+pub(crate) fn persona(root: &str, id: &str) -> String {
     let Ok(raw) = fs::read(Path::new(root).join("config").join("loginusers.vdf")) else { return String::new() };
     let vdf = String::from_utf8_lossy(&raw);
     let Some(at) = vdf.find(&format!("\"{id}\"")) else { return String::new() };

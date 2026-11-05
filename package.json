@@ -7,11 +7,14 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "release": "node scripts/release.cjs"
   },
   "dependencies": {
     "@laihoe/demoparser2": "^0.42.0",
     "@tauri-apps/plugin-dialog": "^2.8.3",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.14.1",
     "demoparser2": "^0.15.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"

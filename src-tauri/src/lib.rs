@@ -1,3 +1,4 @@
+mod faceit;
 mod ffmpeg;
 mod gallery;
 mod gsi;
@@ -5,6 +6,7 @@ mod hlae;
 mod montage;
 mod music;
 mod overlay;
+mod profile;
 mod render;
 mod sky;
 mod skins;
@@ -15,6 +17,9 @@ mod whisper;
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
+    // автообновление из релизов GitHub (latest.json) и перезапуск после установки
+    .plugin(tauri_plugin_updater::Builder::new().build())
+    .plugin(tauri_plugin_process::init())
     .invoke_handler(tauri::generate_handler![
       render::parse_demo,
       render::start_render,
@@ -58,7 +63,13 @@ pub fn run() {
       toast::toast_open,
       gsi::gsi_install,
       gsi::gsi_home,
-      gsi::steam_playtime
+      gsi::steam_playtime,
+      faceit::faceit_recent,
+      faceit::faceit_open,
+      faceit::faceit_import,
+      profile::steam_profile,
+      profile::faceit_profile,
+      profile::open_profile_link
     ])
     .setup(|app| {
       // свой Node и скрипты разбора демок лежат в ресурсах установленной программы (scripts/bundle-parser.cjs)

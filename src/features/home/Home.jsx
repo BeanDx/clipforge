@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { tr, useLang } from "../../i18n";
+import { tr, trError, useLang } from "../../i18n";
 import { mapName, mapTint } from "../match/dossier";
 import { editKills } from "../edit/montage";
 import { placeOf, roundless, modeName } from "./place";
@@ -34,8 +34,14 @@ const loadStats = () => { try { return JSON.parse(localStorage.getItem(STATS_KEY
 
 // скачанная демка, похожая на матч: та же карта и файл появился после матча (в течение 3 дней)
 const demoFor = (m, replays) => replays.find((r) => r.map === m.map && r.modified >= m.started && r.modified - (m.ended || m.started) < 3 * DAY);
+// демка FACEIT узнаётся по имени файла: 1-<uuid матча>-1-1.dem
+const faceitDemo = (f, replays) => f && replays.find((r) => r.path.toLowerCase().includes(f.id.toLowerCase()));
+// матч из игры ↔ матч FACEIT: та же карта и начались почти одновременно (FACEIT считает начало с выбора карты)
+const faceitFor = (m, fc) => fc.find((f) => f.map === m.map && Math.abs(f.started - m.started) < 20 * 60_000)
+  || fc.find((f) => (!f.map || f.map === m.map) && m.started >= f.started - 5 * 60_000 && m.started <= (f.finished || f.started + 3_600_000));
+const FC_WAIT = 10 * 60_000; // сколько ждём файл в «Загрузках» после нажатия «скачать демку»
 
-export function Home({ cs2, onOpenEdit, onOpenDemo }) {
+export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
   useLang();
   const [home, setHome] = useState(null); // { history, live }
   const [pt, setPt] = useState(null); // часы из Steam
@@ -44,6 +50,9 @@ export function Home({ cs2, onOpenEdit, onOpenDemo }) {
   const [busy, setBusy] = useState("");
   const [gsi, setGsi] = useState(null); // null | "ok" | "restart" | "error: ..."
   const [copied, setCopied] = useState(false);
+  const [fcAll, setFc] = useState([]); // последние матчи на FACEIT (faceit.rs)
+  const [fcErr, setFcErr] = useState("");
+  const [waiting, setWaiting] = useState(null); // { id, until } — ждём скачанную демку FACEIT
 
   const refresh = () => invoke("gsi_home").then(setHome).catch(() => {});
   useEffect(() => {
@@ -57,15 +66,50 @@ export function Home({ cs2, onOpenEdit, onOpenDemo }) {
     ];
     return () => uns.forEach((u) => u.then((f) => f()));
   }, []);
+  const loadReplays = () => cs2 && invoke("list_replays", { cs2 }).then(setReplays).catch(() => {});
   useEffect(() => {
     if (!cs2) return;
-    invoke("list_replays", { cs2 }).then(setReplays).catch(() => {});
+    loadReplays();
     // конфиг для игры: если он новый, а игра уже открыта — данные пойдут после перезапуска CS2
     invoke("gsi_install", { cs2 }).then(async (fresh) => {
       const running = fresh && await invoke("cs2_running").catch(() => false);
       setGsi(running ? "restart" : "ok");
     }).catch((e) => setGsi(`error: ${e}`));
-  }, [cs2]);
+  }, [cs2]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // матчи FACEIT — только с ключом Data API из «Настроек»
+  const key = (faceitKey || "").trim();
+  const fc = key.length >= 32 ? fcAll : [];
+  useEffect(() => {
+    if (key.length < 32) return;
+    let alive = true;
+    (async () => {
+      const me = pt?.steamid || (await invoke("steam_users").catch(() => []))[0];
+      if (!me) return;
+      invoke("faceit_recent", { key, steamid: String(me) })
+        .then((l) => { if (alive) { setFc(l); setFcErr(""); } })
+        .catch((e) => alive && setFcErr(trError(e)));
+    })();
+    return () => { alive = false; };
+  }, [key, pt?.steamid]);
+  // забираем скачанные демки FACEIT из «Загрузок»: один раз при открытии и каждые 3 с, пока ждём файл
+  const importDemos = () => cs2 && invoke("faceit_import", { cs2 }).then((got) => {
+    if (got.length) { loadReplays(); setWaiting(null); }
+  }).catch((e) => { setFcErr(trError(e)); setWaiting(null); });
+  useEffect(() => { importDemos(); }, [cs2]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!waiting) return;
+    const t = setInterval(() => (Date.now() > waiting.until ? setWaiting(null) : importDemos()), 3000);
+    return () => clearInterval(t);
+  }, [waiting, cs2]); // eslint-disable-line react-hooks/exhaustive-deps
+  const download = (f) => {
+    setFcErr("");
+    invoke("faceit_open", { url: f.url }).then(() => setWaiting({ id: f.id, until: Date.now() + FC_WAIT })).catch((e) => setFcErr(trError(e)));
+  };
+  // кнопка у матча без демки: открыть комнату FACEIT / ждём файл
+  const dlBtn = (f) => (waiting?.id === f.id
+    ? <button type="button" className="hm-btn is-wait" onClick={() => setWaiting(null)} title={tr("Нажми на FACEIT «Watch demo» — clipforge сам заберёт файл из «Загрузок». Нажми, чтобы перестать ждать.")}>{tr("жду файл...")}</button>
+    : <button type="button" className="hm-btn is-go" onClick={() => download(f)} title={tr("Откроет матч на FACEIT: нажми там «Watch demo», а clipforge сам заберёт демку из «Загрузок»")}>{tr("скачать демку")}</button>);
 
   const hist = home?.history || { matches: [], sessions: [], days: {} };
   const live = home?.live;
@@ -92,14 +136,21 @@ export function Home({ cs2, onOpenEdit, onOpenDemo }) {
   const topGun = Object.entries(guns).sort((a, b) => b[1] - a[1])[0];
 
   // хайлайты из игры по свежим матчам
-  const highlights = matches.flatMap((m) => m.rounds.filter((r) => r.tags?.length).map((r) => ({ m, r, demo: demoFor(m, replays) }))).slice(0, 12);
+  const fcOf = (m) => faceitFor(m, fc);
+  const demoOf = (m) => faceitDemo(fcOf(m), replays) || demoFor(m, replays);
+  const highlights = matches.flatMap((m) => m.rounds.filter((r) => r.tags?.length).map((r) => ({ m, r, demo: demoOf(m), f: fcOf(m) }))).slice(0, 12);
 
   // история: матчи из игры + скачанные демки, которых нет среди матчей
-  const linked = new Set(matches.map((m) => demoFor(m, replays)?.path).filter(Boolean));
+  // + матчи FACEIT, которых игра не записала (программа была закрыта)
+  const gsiRows = matches.map((m) => ({ t: m.started, m, f: fcOf(m), demo: demoOf(m) }));
+  const fcLinked = new Set(gsiRows.map((x) => x.f?.id).filter(Boolean));
+  const fcRows = fc.filter((f) => !fcLinked.has(f.id)).map((f) => ({ t: f.started, f, demo: faceitDemo(f, replays) }));
+  const linked = new Set([...gsiRows, ...fcRows].map((x) => x.demo?.path).filter(Boolean));
   const rows = [
-    ...matches.map((m) => ({ t: m.started, m, demo: demoFor(m, replays) })),
+    ...gsiRows, ...fcRows,
     ...replays.filter((r) => !linked.has(r.path)).map((r) => ({ t: r.modified, demo: r })),
   ].sort((a, b) => b.t - a.t).slice(0, 30);
+  const fcRes = (f) => (f.result === "win" ? tr("победа") : f.result === "loss" ? tr("поражение") : "");
 
   // тренд по демкам
   const trend = replays.map((r) => ({ r, s: stats[`${r.path}|${r.size}`] })).filter((x) => x.s).sort((a, b) => a.r.modified - b.r.modified).slice(-12);
@@ -243,7 +294,7 @@ export function Home({ cs2, onOpenEdit, onOpenDemo }) {
           <header className="hm-card__head"><h2>{tr("Хайлайты из игры")}</h2><span className="mono dim">{tr("3K, 4K, эйс, все в голову, нож и клавиша {0}", live?.mark_key || "F8")}</span></header>
           {highlights.length ? (
             <div className="hm-hl__list">
-              {highlights.map(({ m, r, demo }, i) => (
+              {highlights.map(({ m, r, demo, f }, i) => (
                 <div key={`${m.id}:${r.round}`} className="hm-hl__item" style={{ "--tint": mapTint(m.map), "--i": i }}>
                   <span className={`hm-hl__k ${r.kills >= 5 ? "is-ace" : r.kills >= 4 ? "is-4" : ""}`}>{r.kills >= 5 ? "ACE" : r.kills ? `${r.kills}K` : "★"}</span>
                   <div className="hm-hl__body">
@@ -253,7 +304,7 @@ export function Home({ cs2, onOpenEdit, onOpenDemo }) {
                   </div>
                   {demo
                     ? <button type="button" className="hm-btn is-go" onClick={() => onOpenEdit([demo.path])}>{tr("в эдит")}</button>
-                    : <span className="hm-hl__wait mono dim">{tr("скачай демку в «Смотреть»")}</span>}
+                    : f ? dlBtn(f) : <span className="hm-hl__wait mono dim">{tr("скачай демку в «Смотреть»")}</span>}
                 </div>
               ))}
             </div>
@@ -264,25 +315,28 @@ export function Home({ cs2, onOpenEdit, onOpenDemo }) {
 
         {/* история игр */}
         <section className="hm-card hm-hist span-2">
-          <header className="hm-card__head"><h2>{tr("История игр")}</h2><span className="mono dim">{tr("{0} матчей · {1} демок", matches.length, replays.length)}</span></header>
+          <header className="hm-card__head"><h2>{tr("История игр")}</h2><span className="mono dim">{tr("{0} матчей · {1} демок", matches.length, replays.length)}{fc.length ? ` · FACEIT ${fc.length}` : ""}</span></header>
+          {fcErr && <p className="hm-note hm-err mono">{fcErr}</p>}
+          {key.length < 32 && <p className="hm-note dim">{tr("Чтобы скачивать демки с FACEIT отсюда, укажи ключ FACEIT Data API в «Настройках».")}</p>}
           {rows.length ? (
             <div className="hm-rows">
-              {rows.map(({ m, demo }) => {
+              {rows.map(({ m, f, demo }) => {
                 const s = demo && stats[`${demo.path}|${demo.size}`];
                 const k = m ? m.kills : s?.kills, d = m ? m.deaths : s?.deaths, hs = m ? m.hs : s?.hs;
                 const hl = m ? m.rounds.filter((r) => r.tags?.length).length : 0;
                 return (
-                  <div key={m?.id || demo.path} className="hm-row" style={{ "--tint": mapTint((m || demo).map) }}>
-                    <span className="hm-row__map"><i />{mapName((m || demo).map) || "demo"}</span>
-                    <span className="mono dim hm-row__when">{when(m ? m.started : demo.modified)}</span>
-                    <span className={`hm-res is-${m?.result || (m && !m.finished ? "left" : "none")}`}>
-                      {m ? (resultOf(m)) : tr("демка")}
-                      {m && (m.score_ct || m.score_t) ? <b className="mono"> {m.team === "CT" ? `${m.score_ct}:${m.score_t}` : `${m.score_t}:${m.score_ct}`}</b> : null}
+                  <div key={m?.id || f?.id || demo.path} className="hm-row" style={{ "--tint": mapTint((m || f || demo).map) }}>
+                    <span className="hm-row__map"><i />{mapName((m || f || demo).map) || "demo"}{f && <em className="hm-fc mono">FACEIT</em>}</span>
+                    <span className="mono dim hm-row__when">{when(m ? m.started : f ? f.started : demo.modified)}</span>
+                    <span className={`hm-res is-${m?.result || f?.result || (m && !m.finished ? "left" : "none")}`}>
+                      {m ? (resultOf(m)) : f ? fcRes(f) : tr("демка")}
+                      {m && (m.score_ct || m.score_t) ? <b className="mono"> {m.team === "CT" ? `${m.score_ct}:${m.score_t}` : `${m.score_t}:${m.score_ct}`}</b>
+                        : !m && f?.score ? <b className="mono"> {f.score}</b> : null}
                     </span>
                     <span className="mono hm-row__kd">{k != null ? `${k}/${d ?? "?"}` : "—"}<em>{k ? ` ${pct(hs, k)}% HS` : ""}</em></span>
                     <span className="hm-row__hl">{hl ? <em>★ {hl}</em> : null}{s?.taps ? <em className="is-tap">{tr("тапов {0}", s.taps)}</em> : null}</span>
                     <span className="hm-row__act">
-                      {demo ? <button type="button" className="hm-btn" onClick={() => onOpenDemo(demo.path)}>{tr("открыть")}</button> : <span className="mono dim">{tr("нет демки")}</span>}
+                      {demo ? <button type="button" className="hm-btn" onClick={() => onOpenDemo(demo.path)}>{tr("открыть")}</button> : f ? dlBtn(f) : <span className="mono dim">{tr("нет демки")}</span>}
                       {demo && <button type="button" className="hm-btn is-go" onClick={() => onOpenEdit([demo.path])}>{tr("в эдит")}</button>}
                     </span>
                   </div>

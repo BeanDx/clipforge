@@ -28,3 +28,7 @@ dist-ssr
 *.mp4
 src-tauri/target
 src-tauri/parser
+
+# ключи подписи обновлений никогда не коммитим
+*.key
+*.key.pub

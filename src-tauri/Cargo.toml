@@ -26,10 +26,18 @@ tauri-plugin-log = "2"
 tauri-plugin-dialog = "2.8.3"
 source2-demo = { version = "0.5.10", default-features = false, features = ["cs2"] }
 ureq = "3.5.0"
+ruzstd = "0.8"
+flate2 = "1"
 windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 # Парсер демок без оптимизаций разбирает 160-мегабайтную демку минутами — ускоряем и в dev
 [profile.dev.package.source2-demo]
+opt-level = 3
+
+# распаковка демок FACEIT (.dem.zst, ~300 МБ) без оптимизаций идёт в разы дольше
+[profile.dev.package.ruzstd]
 opt-level = 3
 
 

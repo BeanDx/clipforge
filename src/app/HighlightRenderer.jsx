@@ -19,6 +19,8 @@ import { Gallery } from "../features/gallery/Gallery";
 import { LiveStatus } from "./LiveStatus";
 import { NightEdit } from "../features/edit/NightEdit";
 import { Home } from "../features/home/Home";
+import { Profile } from "../features/profile/Profile";
+import { Updater, CHECK_EVENT as UPDATE_CHECK } from "../features/update/Updater";
 import { buildSkyEquirect, skyAzOfYaw } from "../features/edit/nightfx";
 import shotHudMatch from "../assets/previews/hud-match.webp";
 import shotHudDemo from "../assets/previews/hud-demo.webp";
@@ -26,7 +28,8 @@ import "./highlight-renderer.css";
 import { version as APP_VERSION } from "../../package.json";
 
 import { tr, trError, getLang, setLang, useLang } from "../i18n";
-const TABS = ["Главная", "Демо", "Архив", "Хайлайты", "Эдит", "Рендер", "Очередь", "Библиотека", "Настройки"];
+const TABS = ["Главная", "Демо", "Архив", "Хайлайты", "Эдит", "Профиль", "Очередь", "Библиотека", "Настройки"];
+const PROFILE_TAB = TABS.indexOf("Профиль");
 const HOME_TAB = TABS.indexOf("Главная");
 const DEMO_TAB = TABS.indexOf("Демо");
 const ARCHIVE_TAB = TABS.indexOf("Архив");
@@ -975,6 +978,7 @@ const voicePayload = useMemo(() => {
   return (
     <div className="app" ref={appRef}>
       <div className="hazard" />
+      <Updater />
       <nav className="topbar">
         <div className="brand"><i className="brand__mark" /><span>clipforge</span><em className="mono dim">cs2</em></div>
         <ul role="tablist" className="tabs">
@@ -1011,8 +1015,10 @@ const voicePayload = useMemo(() => {
       })()}
 
       {tab === HOME_TAB ? (
-        <Home cs2={paths.cs2} onOpenDemo={openFromArchive}
+        <Home cs2={paths.cs2} faceitKey={faceitKey} onOpenDemo={openFromArchive}
           onOpenEdit={(demos) => { setEditPreset({ demos, at: Date.now() }); setTab(EDIT_TAB); }} />
+      ) : tab === PROFILE_TAB ? (
+        <Profile faceitKey={faceitKey} onGoSettings={() => setTab(SETTINGS_TAB)} />
       ) : tab === EDIT_TAB ? (
         <main className="grid" key={tab}>
           <NightEdit Frame={Frame} Hint={Hint} archive={archive} preset={editPreset} cs2={paths.cs2} hlae={paths.hlae} out={paths.out}
@@ -1186,7 +1192,12 @@ const voicePayload = useMemo(() => {
 
           <Frame title={tr("О приложении")} meta="clipforge">
             <div className="about">
-              <div className="about__row"><span className="mono dim">{tr("версия")}</span><span className="mono">{APP_VERSION}</span></div>
+              <div className="about__row"><span className="mono dim">{tr("версия")}</span>
+                <span className="about__ver">
+                  <span className="mono">{APP_VERSION}</span>
+                  <button type="button" className="chip" onClick={() => window.dispatchEvent(new Event(UPDATE_CHECK))}>{tr("проверить обновления")}</button>
+                </span>
+              </div>
               <div className="about__row"><span className="mono dim">{tr("движок записи")}</span><span className="mono">HLAE + ffmpeg</span></div>
               <div className="about__row"><span className="mono dim">{tr("парсер демок")}</span><span className="mono">demoparser2</span></div>
             </div>
