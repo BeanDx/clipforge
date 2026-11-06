@@ -41,12 +41,39 @@ const faceitFor = (m, fc) => fc.find((f) => f.map === m.map && Math.abs(f.starte
   || fc.find((f) => (!f.map || f.map === m.map) && m.started >= f.started - 5 * 60_000 && m.started <= (f.finished || f.started + 3_600_000));
 const FC_WAIT = 10 * 60_000; // сколько ждём файл в «Загрузках» после нажатия «скачать демку»
 
+// сколько строк видно в свёрнутом списке
+const SHORT = 3;
+
+// Плавное раскрытие: высота анимируется через grid-template-rows 0fr → 1fr (CSS .hm-collapse).
+// Свёрнутое содержимое недоступно для Tab и скринридеров (inert).
+function Collapse({ open, children }) {
+  return (
+    <div className={`hm-collapse ${open ? "is-open" : ""}`} inert={!open}>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+// «показать все (N)» / «свернуть» под длинным списком; при трёх и меньше строках кнопки нет
+function MoreToggle({ total, open, onToggle }) {
+  if (total <= SHORT) return null;
+  return (
+    <button type="button" className={`hm-more mono ${open ? "is-open" : ""}`} onClick={() => onToggle(!open)}>
+      {open ? tr("свернуть") : tr("показать все · ещё {0}", total - SHORT)}
+      <i aria-hidden="true" />
+    </button>
+  );
+}
+
 export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
   useLang();
   const [home, setHome] = useState(null); // { history, live }
   const [pt, setPt] = useState(null); // часы из Steam
   const [replays, setReplays] = useState([]);
   const [stats, setStats] = useState(loadStats);
+  // длинные списки (история игр, матчи сессии) свёрнуты до трёх последних
+  const [histOpen, setHistOpen] = useState(false);
+  const [sessOpen, setSessOpen] = useState(false);
   const [busy, setBusy] = useState("");
   const [gsi, setGsi] = useState(null); // null | "ok" | "restart" | "error: ..."
   const [copied, setCopied] = useState(false);
@@ -123,12 +150,20 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
     const t = now - (13 - i) * DAY;
     return { key: dayKey(t), wd: WD[new Date(t).getDay()], sec: hist.days?.[dayKey(t)] || 0 };
   });
-  const maxSec = Math.max(3600, ...days.map((d) => d.sec));
   const tracked = days.reduce((s, d) => s + d.sec, 0);
+  // шкала часов: шаг по максимуму, верх графика — ближайшая отметка сверху
+  const maxH = Math.max(1, ...days.map((d) => d.sec / 3600));
+  const stepH = maxH <= 2 ? 0.5 : maxH <= 4 ? 1 : maxH <= 10 ? 2 : 4;
+  const topH = Math.ceil(maxH / stepH) * stepH;
+  const ticks = Array.from({ length: Math.round(topH / stepH) }, (_, i) => (i + 1) * stepH);
+  // дни, когда реально играл (от 5 минут), и самый долгий из них
+  const active = days.filter((d) => d.sec >= 300);
+  const longest = active.reduce((b, d) => (!b || d.sec > b.sec ? d : b), null);
 
   // последняя сессия
   const lastS = [...(hist.sessions || [])].sort((a, b) => b.started - a.started)[0];
   const sm = lastS ? matches.filter((m) => lastS.matches.includes(m.id)) : [];
+  const sessRow = (m) => <li key={m.id}><span className="dim">{mapName(m.map)}</span><b className={`hm-res is-${m.result || (m.finished ? "none" : "left")}`}>{resultOf(m)} · {m.kills}/{m.deaths}</b></li>;
   const ss = sm.reduce((a, m) => ({ k: a.k + m.kills, d: a.d + m.deaths, hs: a.hs + m.hs }), { k: 0, d: 0, hs: 0 });
   const bestRound = sm.flatMap((m) => m.rounds.map((r) => ({ ...r, map: m.map }))).sort((a, b) => b.kills - a.kills || b.hs - a.hs)[0];
   const guns = {};
@@ -256,13 +291,27 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
         {/* часы по дням */}
         <section className="hm-card hm-days">
           <header className="hm-card__head"><h2>{tr("Игра по дням")}</h2><span className="mono dim">{tracked ? fmtH(tracked) + " · 14 " + tr("дней") : tr("считаю с сегодняшнего дня")}</span></header>
-          <div className="hm-bars">
-            {days.map((d, i) => (
-              <div key={d.key} className={`hm-bar ${i === 13 ? "is-today" : ""}`} title={`${d.key}: ${fmtH(d.sec)}`}>
-                <i style={{ height: `${Math.max(2, (d.sec / maxSec) * 100)}%`, "--d": `${i * 30}ms` }} />
-                <span>{tr(d.wd)}</span>
-              </div>
-            ))}
+          {tracked > 0 && (
+            <div className="hm-sess hm-days__sum">
+              <div><b>{active.length ? fmtH(tracked / active.length) : "—"}</b><span>{tr("в среднем за день")}</span></div>
+              <div><b>{longest ? fmtH(longest.sec) : "—"}</b><span>{longest ? tr("самый долгий · {0}", tr(longest.wd)) : tr("самый долгий день")}</span></div>
+              <div><b>{active.length}<small className="dim">/14</small></b><span>{tr("дней в игре")}</span></div>
+            </div>
+          )}
+          <div className="hm-chart">
+            <div className="hm-bars">
+              {ticks.map((h) => (
+                <span key={h} className="hm-tick" style={{ bottom: `${(h / topH) * 100}%` }}>{h} {tr("ч")}</span>
+              ))}
+              {days.map((d, i) => (
+                <div key={d.key} className={`hm-bar ${i === 13 ? "is-today" : ""}`} title={`${d.key}: ${fmtH(d.sec)}`}>
+                  <i style={{ height: `${Math.max(1.5, (d.sec / 3600 / topH) * 100)}%`, "--d": `${i * 30}ms` }} />
+                </div>
+              ))}
+            </div>
+            <div className="hm-days__wd">
+              {days.map((d, i) => <span key={d.key} className={i === 13 ? "is-today" : ""}>{tr(d.wd)}</span>)}
+            </div>
           </div>
           {!tracked && <p className="hm-note dim">{tr("Часы по дням пишутся, пока программа открыта (можно свернуть). За 2 недели по Steam: {0} ч.", pt ? hours(pt.two_weeks) : "—")}</p>}
         </section>
@@ -281,8 +330,10 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
               <ul className="hm-facts">
                 {bestRound && <li><span className="dim">{tr("лучший раунд")}</span><b>{mapName(bestRound.map)} · R{bestRound.round} · {bestRound.kills}K{bestRound.hs === bestRound.kills && bestRound.kills > 1 ? ` · ${tr("все в голову")}` : ""}</b></li>}
                 {topGun && <li><span className="dim">{tr("больше всего киллов")}</span><b>{WEAPON(topGun[0])} · {topGun[1]}</b></li>}
-                {sm.map((m) => <li key={m.id}><span className="dim">{mapName(m.map)}</span><b className={`hm-res is-${m.result || (m.finished ? "none" : "left")}`}>{resultOf(m)} · {m.kills}/{m.deaths}</b></li>)}
+                {sm.slice(0, SHORT).map(sessRow)}
               </ul>
+              <Collapse open={sessOpen}><ul className="hm-facts hm-facts--more">{sm.slice(SHORT).map(sessRow)}</ul></Collapse>
+              <MoreToggle total={sm.length} open={sessOpen} onToggle={setSessOpen} />
             </>
           ) : (
             <p className="hm-empty">{tr("Когда закроешь CS2, здесь будет итог: матчи, K/D, процент в голову, лучший раунд и любимый ствол. Он же придет уведомлением.")}</p>
@@ -320,7 +371,7 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
           {key.length < 32 && <p className="hm-note dim">{tr("Чтобы скачивать демки с FACEIT отсюда, укажи ключ FACEIT Data API в «Настройках».")}</p>}
           {rows.length ? (
             <div className="hm-rows">
-              {rows.map(({ m, f, demo }) => {
+              {(() => { const histRow = ({ m, f, demo }) => {
                 const s = demo && stats[`${demo.path}|${demo.size}`];
                 const k = m ? m.kills : s?.kills, d = m ? m.deaths : s?.deaths, hs = m ? m.hs : s?.hs;
                 const hl = m ? m.rounds.filter((r) => r.tags?.length).length : 0;
@@ -341,7 +392,15 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
                     </span>
                   </div>
                 );
-              })}
+              };
+              // первые три всегда видны, остальные выезжают плавно (Collapse)
+              return (
+                <>
+                  {rows.slice(0, SHORT).map(histRow)}
+                  <Collapse open={histOpen}><div className="hm-rows">{rows.slice(SHORT).map(histRow)}</div></Collapse>
+                </>
+              ); })()}
+              <MoreToggle total={rows.length} open={histOpen} onToggle={setHistOpen} />
             </div>
           ) : (
             <p className="hm-empty">{tr("Пока пусто: сыграй матч или скачай демку в CS2 (Смотреть → Ваши матчи).")}</p>

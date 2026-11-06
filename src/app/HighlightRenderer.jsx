@@ -335,8 +335,11 @@ export default function HighlightRenderer() {
     measure();
     document.fonts?.ready.then(measure); // ширина кнопок меняется после загрузки шрифта
     window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, [tab]);
+    // ширина надписей меняется и при смене языка: следим за всеми кнопками — сдвиг соседней тоже двигает рамку
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    tabRefs.current.forEach((el) => el && ro?.observe(el));
+    return () => { window.removeEventListener("resize", measure); ro?.disconnect(); };
+  }, [tab, lang]); // смена языка — новые надписи уже в DOM, меряем сразу
   const [demo, setDemo] = useState(null);
   const [over, setOver] = useState(false);
   const [clips, setClips] = useState([]);
@@ -395,6 +398,21 @@ export default function HighlightRenderer() {
   const [infoBusy, setInfoBusy] = useState(false);
   const [faceit, setFaceit] = useState(null);
   const [faceitErr, setFaceitErr] = useState("");
+  // мини-режим в трее: крестик прячет окно, статистика матчей пишется дальше (tray.rs)
+  const [closeToTray, setCloseToTray] = useState(() => { try { return localStorage.getItem("cf-close-to-tray") !== "0"; } catch { return true; } });
+  useEffect(() => {
+    try { localStorage.setItem("cf-close-to-tray", closeToTray ? "1" : "0"); } catch {}
+    invoke("set_tray", { closeToTray, labels: {
+      show: tr("Открыть clipforge"), quit: tr("Выйти"), tip: tr("clipforge · пишет статистику матчей"),
+      hiddenTitle: tr("clipforge работает в трее"),
+      hiddenSub: tr("Статистика матчей пишется дальше. Выйти — правой кнопкой по значку в трее"),
+    } }).catch(() => {});
+  }, [closeToTray, lang]);
+  const [autostart, setAutostart] = useState(false);
+  useEffect(() => { invoke("autostart_enabled").then(setAutostart).catch(() => {}); }, []);
+  const toggleAutostart = (on) => invoke("set_autostart", { on }).then(() => setAutostart(on)).catch((e) => setError(String(e)));
+  // сводка системы для «Настроек»: видеокарты с датой драйвера, свободное место, батарея
+  const [sysInfo, setSysInfo] = useState(null);
   const [faceitKey, setFaceitKey] = useState(() => { try { return localStorage.getItem("cf-faceit-key") || ""; } catch { return ""; } });
   useEffect(() => { try { localStorage.setItem("cf-faceit-key", faceitKey.trim()); } catch {} }, [faceitKey]);
   const infoReq = useRef(0);
@@ -786,6 +804,22 @@ const voicePayload = useMemo(() => {
         if (onKill) { c.musicStart = onKill.start; c.drops = onKill.drops; }
         else c.drops = chorusDrops({ lrc: music.lrc, start: music.start, clip: c, slowmo: fx.slowmo });
       }
+    }
+    // проверка системы: место на диске, пути, драйвер, батарея — ошибки не пускают, предупреждения спрашивают
+    {
+      const recFps = blur || fxJob.slowmo || sel.some((c) => c.drops?.length) ? fps * 3 : fps;
+      // повторы от лица жертвы добавляют к записи примерно половину длины клипов
+      const secs = reuse ? 0 : sel.reduce((s, c) => s + (c.end - c.start) / 64, 0) * (fxJob.camVictim ? 1.6 : 1);
+      const issues = await invoke("preflight", { plan: {
+        out: paths.out, cs2: paths.cs2, hlae: paths.hlae, demo: demoPath0, width, height, recFps, seconds: secs,
+        gpu: !!(useGpu && gpuEnc), skins: !reuse && !o && !planIsEmpty(skinPlan),
+      } }).catch(() => []);
+      const text = (list) => list.map((i) => tr(i.text, ...i.args));
+      const errs = issues.filter((i) => i.level === "error");
+      if (errs.length) { setError(text(errs).join(" · ")); return; }
+      const warns = issues.filter((i) => i.level === "warn");
+      if (warns.length && !await ask(`${text(warns).join("\n\n")}\n\n${tr("Все равно начать рендер?")}`,
+        { title: tr("Проверка системы"), kind: "warning", okLabel: tr("Начать"), cancelLabel: tr("Отмена") })) return;
     }
     // HLAE не запускает вторую CS2 («already running») — предлагаем закрыть открытую
     if (!reuse && !o && await invoke("cs2_running").catch(() => false)) {
@@ -1188,6 +1222,34 @@ const voicePayload = useMemo(() => {
               <input className="mono" value={faceitKey} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" spellCheck={false}
                 onChange={(e) => setFaceitKey(e.target.value)} />
             </label>
+          </Frame>
+
+          <Frame title={tr("Трей и автозапуск")} meta={closeToTray ? tr("крестик сворачивает в трей") : tr("крестик закрывает программу")} className="span-2"
+            help={tr("В трее clipforge почти не тратит ресурсы: окно ничего не рисует, а статистика матчей и закладки хайлайтов пишутся дальше. Открыть — кликом по значку, выйти — правой кнопкой по значку.")}>
+            <Toggle label={tr("Сворачивать в трей при закрытии")} hint={tr("крестик прячет окно, а не закрывает программу")}
+              checked={closeToTray} onChange={setCloseToTray} />
+            <Toggle label={tr("Запускать вместе с Windows")} hint={tr("сразу в трей, без окна - чтобы не пропустить ни одного матча")}
+              checked={autostart} onChange={toggleAutostart} />
+          </Frame>
+
+          <Frame title={tr("Проверка системы")} meta={tr("перед каждым рендером")} className="span-2"
+            help={tr("Перед рендером clipforge сам проверяет место на диске, пути к игре и HLAE, драйвер видеокарты и питание ноутбука. Здесь можно посмотреть сводку заранее.")}>
+            {sysInfo ? (
+              <div className="about">
+                {sysInfo.gpus.map(([name, date]) => (
+                  <div className="about__row" key={name}><span className="mono dim">{name}</span>
+                    <span className="mono">{date ? tr("драйвер от {0}", date) : tr("драйвер не найден")}</span></div>
+                ))}
+                <div className="about__row"><span className="mono dim">{tr("свободно в папке хайлайтов")}</span>
+                  <span className="mono">{sysInfo.free_gb ? tr("{0} ГБ", sysInfo.free_gb) : "—"}</span></div>
+                <div className="about__row"><span className="mono dim">{tr("питание")}</span>
+                  <span className="mono">{sysInfo.battery ? tr("от батареи") : tr("от сети")}</span></div>
+              </div>
+            ) : null}
+            <button type="button" className="go go--ghost"
+              onClick={() => { setSysInfo(null); invoke("system_info", { out: paths.out }).then(setSysInfo).catch(() => {}); }}>
+              {tr("Проверить систему")}
+            </button>
           </Frame>
 
           <Frame title={tr("О приложении")} meta="clipforge">

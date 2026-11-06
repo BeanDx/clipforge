@@ -1461,8 +1461,35 @@
 .hm-empty { margin: 0; color: var(--dim); line-height: 1.5; max-width: 640px; }
 .hm-note { margin: 10px 0 0; font-size: .9rem; }
 
-.hm-bars { display: grid; grid-template-columns: repeat(14, 1fr); gap: 6px; align-items: end; height: 150px; }
-.hm-bar { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 6px; height: 100%; }
+/* блок тянется под высоту соседнего «Итога сессии»: сверху плитки-итоги, под ними график со шкалой часов */
+.hm-days { display: flex; flex-direction: column; }
+.hm-sess.hm-days__sum { grid-template-columns: repeat(3, 1fr); margin-bottom: 18px; }
+.hm-sess.hm-days__sum b { font-size: 1.1rem; white-space: nowrap; }
+.hm-days__sum b small { font-size: .75rem; margin-left: 2px; }
+.hm-chart { flex: 1; display: flex; flex-direction: column; min-height: 160px; }
+/* плавное раскрытие списков: высота 0fr → 1fr, строки проявляются с небольшим сдвигом */
+.hm-collapse { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .45s cubic-bezier(.2,.8,.2,1); }
+.hm-collapse.is-open { grid-template-rows: 1fr; }
+.hm-collapse > div { min-height: 0; overflow: hidden; opacity: 0; transform: translateY(-6px); transition: opacity .3s ease, transform .45s cubic-bezier(.2,.8,.2,1); }
+.hm-collapse.is-open > div { opacity: 1; transform: none; transition-delay: .05s; }
+.hm-facts--more { margin-top: 6px; }
+@media (prefers-reduced-motion: reduce) { .hm-collapse, .hm-collapse > div { transition: none; } }
+/* «показать все / свернуть» под списками */
+.hm-more { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; margin-top: 10px; padding: 8px;
+  font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); border: 1px dashed var(--line) !important; transition: color .15s, border-color .15s; }
+.hm-more:hover { color: var(--teal); border-color: var(--teal) !important; }
+.hm-more i { width: 6px; height: 6px; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: translateY(-2px) rotate(45deg); transition: transform .2s; }
+.hm-more.is-open i { transform: translateY(1px) rotate(-135deg); }
+.hm-bars { position: relative; flex: 1; display: grid; grid-template-columns: repeat(14, 1fr); grid-template-rows: minmax(0, 1fr); gap: 8px; align-items: end; padding-right: 34px; border-bottom: 1px solid var(--line); }
+/* горизонтальные линии шкалы с подписью справа */
+.hm-tick { position: absolute; left: 0; right: 0; display: flex; align-items: center; gap: 6px; transform: translateY(50%);
+  font: .6rem var(--mono); color: var(--dim); white-space: nowrap; pointer-events: none; }
+.hm-tick::before { content: ""; flex: 1; border-top: 1px dashed rgba(255,255,255,.07); }
+.hm-days__wd { display: grid; grid-template-columns: repeat(14, 1fr); gap: 8px; padding: 6px 34px 0 0; }
+.hm-days__wd span { font: .62rem var(--mono); color: var(--dim); text-transform: uppercase; text-align: center; }
+.hm-days__wd span.is-today { color: var(--yellow); }
+.hm-bar { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; position: relative; z-index: 1; }
+.hm-bar i { max-width: 34px; border-radius: 2px 2px 0 0; }
 .hm-bar i { width: 100%; background: linear-gradient(to top, rgba(46,230,192,.35), var(--teal)); transform-origin: bottom; animation: hm-grow .6s var(--d) cubic-bezier(.2,.8,.2,1) both; }
 .hm-bar.is-today i { background: linear-gradient(to top, rgba(245,197,24,.4), var(--yellow)); box-shadow: 0 0 14px rgba(245,197,24,.35); }
 .hm-bar span { font: .62rem var(--mono); color: var(--dim); text-transform: uppercase; }

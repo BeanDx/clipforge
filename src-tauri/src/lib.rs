@@ -1,4 +1,5 @@
 mod faceit;
+mod friends;
 mod ffmpeg;
 mod gallery;
 mod gsi;
@@ -6,16 +7,32 @@ mod hlae;
 mod montage;
 mod music;
 mod overlay;
+mod preflight;
 mod profile;
 mod render;
 mod sky;
 mod skins;
 mod toast;
+mod tray;
 mod whisper;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  // Установленная программа и `tauri dev` с одним identifier делят папку WebView2, а значит и один
+  // процесс движка — его владелец тот, кто открылся первым. tauri dev при пересборке убивает своё дерево
+  // процессов вместе с движком, и у установленной копии остаётся чёрное окно. Отладочной сборке — своя папка.
+  #[cfg(debug_assertions)]
+  if std::env::var_os("WEBVIEW2_USER_DATA_FOLDER").is_none() {
+    if let Some(base) = std::env::var_os("LOCALAPPDATA") {
+      // SAFETY: в самом начале run(), до любых потоков
+      unsafe { std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", std::path::Path::new(&base).join("com.clipforge.app.dev")) };
+    }
+  }
+
   tauri::Builder::default()
+    // вторая копия (ярлык, пока clipforge в трее) не запускается, а показывает окно первой.
+    // Плагин регистрируется первым, чтобы вторая копия вышла раньше всего остального
+    .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_main(app)))
     .plugin(tauri_plugin_dialog::init())
     // автообновление из релизов GitHub (latest.json) и перезапуск после установки
     .plugin(tauri_plugin_updater::Builder::new().build())
@@ -69,9 +86,40 @@ pub fn run() {
       faceit::faceit_import,
       profile::steam_profile,
       profile::faceit_profile,
-      profile::open_profile_link
+      profile::open_profile_link,
+      friends::steam_friends,
+      tray::set_tray,
+      tray::autostart_enabled,
+      tray::set_autostart,
+      preflight::preflight,
+      preflight::system_info
     ])
+    // крестик прячет окно в трей (если так выбрано в настройках)
+    .on_window_event(|window, event| {
+      if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+        tray::on_close(window, api);
+      }
+    })
     .setup(|app| {
+      // окно по умолчанию 1400×760 (tauri.conf.json), чтобы справа в шапке влезал живой статус;
+      // на экране поменьше ужимаем до рабочей области (без панели задач), но не меньше минимума
+      if let Some(w) = tauri::Manager::get_webview_window(app, "main") {
+        if let Ok(Some(m)) = w.current_monitor() {
+          let sf = m.scale_factor();
+          let area = m.work_area().size;
+          let (aw, ah) = (area.width as f64 / sf, area.height as f64 / sf);
+          let (cw, ch) = (1400f64.min(aw * 0.94).max(960.0), 760f64.min(ah * 0.92).max(540.0));
+          if cw < 1400.0 || ch < 760.0 {
+            let _ = w.set_size(tauri::LogicalSize::new(cw, ch));
+            let _ = w.center();
+          }
+        }
+      }
+      // окно создаётся скрытым (tauri.conf.json): при автозапуске с Windows (--tray) так и остаётся в трее
+      tray::setup(app.handle())?;
+      if !tray::started_in_tray() {
+        tray::show_main(app.handle());
+      }
       // свой Node и скрипты разбора демок лежат в ресурсах установленной программы (scripts/bundle-parser.cjs)
       if let Ok(dir) = tauri::Manager::path(app).resource_dir() {
         render::set_parser_dir(dir.join("parser"));

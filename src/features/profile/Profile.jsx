@@ -1,30 +1,21 @@
 // Вкладка «Профиль»: профиль CS2 игрока — Steam (src-tauri/src/profile.rs, без ключа), FACEIT (уровень,
 // эло, винрейт, форма за 30 матчей, карты; нужен ключ Data API) и для своего профиля — то, что записал
-// clipforge во время игры (gsi.rs): часы, матчи, оружие. Можно открыть любого игрока по SteamID или нику.
+// clipforge во время игры (gsi.rs): часы, матчи, оружие. Можно открыть любого игрока по SteamID или нику,
+// выбрать из друзей Steam (Friends.jsx) и сравнить двух игроков бок о бок (Compare.jsx).
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { tr, trError, useLang } from "../../i18n";
 import { mapName, mapTint } from "../match/dossier";
+import { LEVELS, LVL_COLOR, num, pct, pad, mapId, gameTime, fetchPlayer, summarize } from "./data";
+import { Friends } from "./Friends";
+import { Compare } from "./Compare";
 import "./profile.css";
+import "./compare.css";
 
-// уровни FACEIT CS2: нижняя граница эло каждого уровня
-const LEVELS = [0, 100, 501, 751, 901, 1051, 1201, 1351, 1531, 1751, 2001];
-const LVL_COLOR = (l) => (l >= 10 ? "#fe1f00" : l >= 8 ? "#ff6309" : l >= 4 ? "#ffc800" : l >= 2 ? "#1ce400" : "#eeeeee");
 const WEAPON = (w) => ({ ssg08: "SSG 08", awp: "AWP", ak47: "AK-47", m4a1_silencer: "M4A1-S", m4a1: "M4A4", deagle: "Desert Eagle", usp_silencer: "USP-S", glock: "Glock-18" }[w] || (w || "").replace(/_/g, " ").toUpperCase());
-const num = (v) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return Number.isFinite(n) ? n : null; };
-const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
-const pad = (n) => String(n).padStart(2, "0");
-// карта FACEIT («Dust2», «de_dust2») → внутреннее имя для mapName/mapTint
-const mapId = (m) => { const s = String(m || "").toLowerCase().replace(/\s+/g, ""); return s.includes("_") ? s : `de_${s}`; };
-const gameTime = (g) => num(g["Match Finished At"]) || Date.parse(g["Created At"] || "") || 0;
-const steamLike = (q) => /^7656\d{13}$/.test(q) || /steamcommunity\.com/i.test(q);
 // подсказка в поле поиска: как будет понят ввод
 const kindOf = (q, hasKey) => (/^7656\d{13}$/.test(q) ? "SteamID64" : /steamcommunity\.com/i.test(q) ? "Steam" : /faceit\.com/i.test(q) ? "FACEIT"
   : hasKey ? tr("ник") : tr("имя Steam"));
-
-// кэш на время работы программы: вкладку переключают туда-сюда, а FACEIT считает запросы
-const CACHE = new Map();
-const TTL = 5 * 60_000;
 
 // число, которое «докручивается» до значения при появлении
 function Count({ to, digits = 0, suffix = "" }) {
@@ -59,6 +50,8 @@ export function Profile({ faceitKey, onGoSettings }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [copied, setCopied] = useState(false);
+  const [friends, setFriends] = useState(false); // панель друзей открыта
+  const [vs, setVs] = useState(null); // второй игрок для сравнения
   const req = useRef(0);
 
   useEffect(() => {
@@ -66,36 +59,31 @@ export function Profile({ faceitKey, onGoSettings }) {
     invoke("gsi_home").then(setHome).catch(() => {});
   }, []);
 
-  const load = async (query) => {
-    const ownId = me?.steamid;
-    const qs = (query || "").trim() || ownId;
+  // загрузка игрока: в профиль (into = "main") или вторым в сравнение (into = "vs")
+  const load = async (query, into = "main") => {
+    const qs = (query || "").trim() || me?.steamid;
     if (!qs) return;
-    const ck = `${qs}|${hasKey}`;
-    const hit = CACHE.get(ck);
-    if (hit && Date.now() - hit.at < TTL) { setData(hit.data); setErr(""); return; }
     const id = ++req.current;
     setBusy(true); setErr("");
     try {
-      let steam = null, fc = null, steamErr = null;
-      // Steam может не ответить (429 — слишком много запросов): тогда показываем хотя бы FACEIT
-      const steamOf = (query) => invoke("steam_profile", { query }).catch((e) => { steamErr = e; return null; });
-      const isFaceit = /faceit\.com/i.test(qs);
-      if (isFaceit || (!steamLike(qs) && hasKey)) {
-        // ник или ссылка FACEIT; если такого ника нет — пробуем как короткое имя Steam
-        fc = await invoke("faceit_profile", { key, steamid: null, nickname: qs });
-        const sid = fc?.player?.steamid;
-        if (sid) steam = await steamOf(String(sid));
-        else if (!isFaceit) steam = await steamOf(qs);
-      } else {
-        steam = await steamOf(qs);
-      }
-      const sid64 = steam?.steamid || (qs.match(/7656\d{13}/) || [])[0];
-      if (!fc && sid64 && hasKey) fc = await invoke("faceit_profile", { key, steamid: sid64, nickname: null });
-      if (!steam && !fc) throw steamErr || tr("игрок не найден");
-      const res = { steam, fc, own: !!ownId && (steam?.steamid === ownId || fc?.player?.steamid === ownId), steamErr: steam ? null : steamErr };
-      // если Steam не ответил — не запоминаем, чтобы следующий заход попробовал снова
-      if (steam && !steam.stale) CACHE.set(ck, { at: Date.now(), data: res });
-      if (id === req.current) setData(res);
+      const res = await fetchPlayer(qs, { key, hasKey, ownId: me?.steamid });
+      if (id !== req.current) return;
+      if (into === "vs") setVs(res);
+      else { setData(res); setVs(null); }
+    } catch (e) {
+      if (id === req.current) setErr(trError(e));
+    } finally {
+      if (id === req.current) setBusy(false);
+    }
+  };
+  // «сравнить со мной» на чужом профиле: я слева, он справа
+  const compareMe = async () => {
+    const other = data;
+    const id = ++req.current;
+    setBusy(true); setErr("");
+    try {
+      const mine = await fetchPlayer(me.steamid, { key, hasKey, ownId: me.steamid });
+      if (id === req.current) { setData(mine); setVs(other); }
     } catch (e) {
       if (id === req.current) setErr(trError(e));
     } finally {
@@ -110,27 +98,19 @@ export function Profile({ faceitKey, onGoSettings }) {
   }, [me?.steamid, hasKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const s = data?.steam, f = data?.fc, p = f?.player;
+  const st = summarize(f);
   const life = f?.lifetime || {};
-  const games = [...(f?.games || [])].sort((a, b) => gameTime(a) - gameTime(b)); // старые → новые
+  const games = st?.games || [];
   const name = p?.nickname || s?.name || "";
   const avatar = s?.avatar || p?.avatar;
   const lvl = num(p?.level), elo = num(p?.elo);
   const tint = lvl ? LVL_COLOR(lvl) : "#2ee6c0";
-
-  // форма: последние 30 против всей карьеры
-  const g30 = games.reduce((a, g) => ({ k: a.k + (num(g.Kills) || 0), d: a.d + (num(g.Deaths) || 0), w: a.w + (g.Result === "1"), adr: a.adr + (num(g.ADR) || 0), hs: a.hs + (num(g["Headshots %"]) || 0) }), { k: 0, d: 0, w: 0, adr: 0, hs: 0 });
-  const kd30 = games.length ? g30.k / Math.max(1, g30.d) : null;
-  const kdLife = num(life["Average K/D Ratio"]);
-  const adr = games.length ? g30.adr / games.length : num(life.ADR);
-  const recent = (life["Recent Results"] || []).slice(-5);
-
-  const maps = (f?.maps || []).map((m) => ({ ...m, id: mapId(m.map), n: num(m.stats?.Matches) || 0, wr: num(m.stats?.["Win Rate %"]) || 0, kd: num(m.stats?.["Average K/D Ratio"]) }))
-    .filter((m) => m.n > 0).sort((a, b) => b.n - a.n);
-  const bestMap = maps.filter((m) => m.n >= 5).sort((a, b) => b.wr - a.wr)[0];
+  const steamid = s?.steamid || p?.steamid;
+  const maps = st?.maps || [], bestMap = st?.bestMap;
 
   // своё из игры (gsi.rs)
   const hist = data?.own ? home?.history?.matches || [] : [];
-  const loc = hist.reduce((a, m) => ({ k: a.k + m.kills, d: a.d + m.deaths, hs: a.hs + m.hs, w: a.w + (m.result === "win"), mvp: a.mvp + (m.mvps || 0) }), { k: 0, d: 0, hs: 0, w: 0, mvp: 0 });
+  const loc = hist.reduce((a, m) => ({ k: a.k + m.kills, d: a.d + m.deaths, hs: a.hs + m.hs }), { k: 0, d: 0, hs: 0 });
   const guns = {};
   hist.forEach((m) => Object.entries(m.weapons || {}).forEach(([w, n]) => { guns[w] = (guns[w] || 0) + n; }));
   const topGuns = Object.entries(guns).sort((a, b) => b[1] - a[1]).slice(0, 5);
@@ -139,9 +119,8 @@ export function Profile({ faceitKey, onGoSettings }) {
 
   const open = (url) => url && invoke("open_profile_link", { url }).catch(() => {});
   const copyId = () => {
-    const id = s?.steamid || p?.steamid;
-    if (!id) return;
-    navigator.clipboard?.writeText(String(id)).catch(() => {});
+    if (!steamid) return;
+    navigator.clipboard?.writeText(String(steamid)).catch(() => {});
     setCopied(true); setTimeout(() => setCopied(false), 1800);
   };
   const submit = (e) => { e.preventDefault(); load(q); };
@@ -167,6 +146,10 @@ export function Profile({ faceitKey, onGoSettings }) {
           </button>
           <span className="pf-search__line" aria-hidden="true" />
         </form>
+        {me?.steamid && (
+          <button type="button" className="pf-btn pf-search__me" onClick={() => setFriends(true)}
+            title={tr("друзья Steam: открыть профиль или сравнить")}>👥 {tr("друзья")}</button>
+        )}
         {me?.steamid && !data?.own && (
           <button type="button" className="pf-btn pf-search__me" onClick={() => { setQ(""); load(""); }}>{tr("мой профиль")}</button>
         )}
@@ -179,8 +162,28 @@ export function Profile({ faceitKey, onGoSettings }) {
         <p className="pf-empty">{tr("Не нашёл аккаунт Steam на этом компьютере. Введи SteamID или ссылку на профиль выше.")}</p>
       )}
 
-      {data && (
-        <div className={`pf-body ${busy ? "is-busy" : ""}`} key={s?.steamid || p?.id}>
+      {friends && (steamid || me?.steamid) && (
+        <Friends
+          steamid={String(data?.own || !steamid ? me.steamid : steamid)}
+          own={!!data?.own || !steamid}
+          name={name}
+          faceitKey={faceitKey}
+          onClose={() => setFriends(false)}
+          onOpen={(fr) => { setFriends(false); setQ(""); load(fr.steamid); }}
+          onCompare={(fr) => { setFriends(false); load(fr.steamid, "vs"); }}
+          onCompareQuery={(text) => { setFriends(false); load(text, "vs"); }}
+        />
+      )}
+
+      {data && vs && (
+        <Compare a={data} b={vs} hasKey={hasKey} onGoSettings={onGoSettings}
+          onClose={() => setVs(null)}
+          onSwap={() => { setData(vs); setVs(data); }}
+          onOpenB={() => { setData(vs); setVs(null); }} />
+      )}
+
+      {data && !vs && (
+        <div className={`pf-body ${busy ? "is-busy" : ""}`} key={steamid || p?.id}>
           {/* шапка */}
           <section className="pf-hero" style={{ "--tint": tint }}>
             <div className="pf-hero__bg" aria-hidden="true">
@@ -207,9 +210,15 @@ export function Profile({ faceitKey, onGoSettings }) {
                   {s?.stale && <span className="pf-badge is-warn" title={tr("Steam временно ограничил запросы — показываю сохранённые данные. Обновится сам при следующем открытии.")}><i />{tr("Steam не ответил: данные сохранены ранее")}</span>}
                 </div>
                 <div className="pf-links">
+                  {!data.own && me?.steamid && (
+                    <button type="button" className="pf-btn is-go" onClick={compareMe}
+                      title={tr("сравнить этого игрока с тобой")}>⚔ {tr("сравнить со мной")}</button>
+                  )}
+                  {data.own && <button type="button" className="pf-btn is-go" onClick={() => setFriends(true)}>⚔ {tr("сравнить с другом")}</button>}
+                  {!data.own && steamid && <button type="button" className="pf-btn" onClick={() => setFriends(true)}>👥 {tr("его друзья")}</button>}
                   {s?.url && <button type="button" className="pf-btn" onClick={() => open(s.url)}>Steam ↗</button>}
                   {p?.url && <button type="button" className="pf-btn" onClick={() => open(p.url)}>FACEIT ↗</button>}
-                  {(s?.steamid || p?.steamid) && <button type="button" className="pf-btn" onClick={copyId}>{copied ? tr("скопировано") : tr("копировать SteamID")}</button>}
+                  {steamid && <button type="button" className="pf-btn" onClick={copyId}>{copied ? tr("скопировано") : tr("копировать SteamID")}</button>}
                 </div>
               </div>
             </div>
@@ -219,14 +228,14 @@ export function Profile({ faceitKey, onGoSettings }) {
           </section>
 
           {/* цифры FACEIT */}
-          {p ? (
+          {st ? (
             <section className="pf-tiles">
-              <Tile label={tr("матчей")} value={<Count to={num(life.Matches)} />} sub={tr("{0} побед", life.Wins ?? "—")} />
-              <Tile label={tr("винрейт")} value={<Count to={num(life["Win Rate %"])} suffix="%" />} sub={<Dots res={recent} />} accent />
-              <Tile label="K/D" value={<Count to={kdLife} digits={2} />} sub={kd30 != null ? <Trend now={kd30} was={kdLife} label={tr("за 30 матчей")} digits={2} /> : ""} />
-              <Tile label={tr("в голову")} value={<Count to={num(life["Average Headshots %"])} suffix="%" />} sub={games.length ? tr("{0}% за 30 матчей", Math.round(g30.hs / games.length)) : ""} />
-              <Tile label="ADR" value={<Count to={adr} digits={1} />} sub={tr("урон за раунд")} />
-              <Tile label={tr("лучшая серия")} value={<Count to={num(life["Longest Win Streak"])} />} sub={tr("сейчас: {0}", life["Current Win Streak"] ?? 0)} />
+              <Tile label={tr("матчей")} value={<Count to={st.matches} />} sub={tr("{0} побед", life.Wins ?? "—")} />
+              <Tile label={tr("винрейт")} value={<Count to={st.wr} suffix="%" />} sub={<Dots res={st.recent} />} accent />
+              <Tile label="K/D" value={<Count to={st.kd} digits={2} />} sub={st.kd30 != null ? <Trend now={st.kd30} was={st.kd} label={tr("за 30 матчей")} digits={2} /> : ""} />
+              <Tile label={tr("в голову")} value={<Count to={st.hs} suffix="%" />} sub={st.hs30 != null ? tr("{0}% за 30 матчей", Math.round(st.hs30)) : ""} />
+              <Tile label="ADR" value={<Count to={st.adr} digits={1} />} sub={tr("урон за раунд")} />
+              <Tile label={tr("лучшая серия")} value={<Count to={st.streak} />} sub={tr("сейчас: {0}", life["Current Win Streak"] ?? 0)} />
             </section>
           ) : (
             <section className="pf-card pf-cta">
@@ -246,7 +255,7 @@ export function Profile({ faceitKey, onGoSettings }) {
               <section className="pf-card pf-form span-2">
                 <header className="pf-card__head">
                   <h2>{tr("Форма")}</h2>
-                  <span className="mono dim">{tr("K/D за последние {0} матчей · {1} побед", games.length, g30.w)}</span>
+                  <span className="mono dim">{tr("K/D за последние {0} матчей · {1} побед", games.length, st.g30.w)}</span>
                 </header>
                 <FormChart games={games} />
               </section>
