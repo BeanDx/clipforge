@@ -14,6 +14,7 @@ import { orbitPath } from "../features/demo/cine";
 import { lyricStyle } from "../features/music/lyricStyles";
 import { MatchDossier, infoSummary, mapName, mapTint } from "../features/match/dossier";
 import { drawCard } from "../features/match/card";
+import { recordDemo, noteRender, loadHistory, evaluate, topBadges, isOwn } from "../features/profile/badges";
 import { CompareModal } from "../features/gallery/CompareModal";
 import { Gallery } from "../features/gallery/Gallery";
 import { LiveStatus } from "./LiveStatus";
@@ -585,6 +586,7 @@ export default function HighlightRenderer() {
       const r = parseDemo(raw, 64, pad.before, pad.after);
       setDemo({ path, name: path.split(/[\\/]/).pop(), size: raw.size });
       setClips(r.clips); setPlayers(r.players); setMaxRound(r.maxRound); setRoster(r.roster); setHurts(r.hurts);
+      recordDemo({ path, size: raw.size }, r.clips).catch(() => {});
       const auto = {};
       r.players.forEach((p) => { if (p.slot) auto[p.id] = String(p.slot); });
       setSlots(auto);
@@ -621,6 +623,7 @@ export default function HighlightRenderer() {
       try {
         const raw = JSON.parse(await invoke("parse_demo", { path }));
         const r = parseDemo(raw, 64, pad.before, pad.after);
+        recordDemo({ path, size: raw.size }, r.clips).catch(() => {});
         const map = await invoke("demo_header", { path }).catch(() => "");
         setArchive((arc) => {
           const prev = arc.find((d) => d.path === path);
@@ -668,7 +671,9 @@ export default function HighlightRenderer() {
   const makeCard = async () => {
     const p = info?.players.find((x) => x.id === playerId) || info?.players[0];
     if (!p) return;
-    const cv = await drawCard({ info, player: p, faceit });
+    // бейджи — только на карточке своего аккаунта
+    const badges = (await isOwn(p.id)) ? topBadges(evaluate(await loadHistory())) : [];
+    const cv = await drawCard({ info, player: p, faceit, badges });
     const blob = await new Promise((r) => cv.toBlob(r, "image/png"));
     setCardMsg("");
     setCard((c) => {
@@ -756,7 +761,7 @@ const voicePayload = useMemo(() => {
   useEffect(() => {
     const subs = [
       listen("render-progress", (e) => setProgress(e.payload)),
-      listen("render-done", () => { setRendering(false); setStage(""); setProgress(100); waitRef.current?.resolve(); waitRef.current = null; }),
+      listen("render-done", () => { noteRender(); setRendering(false); setStage(""); setProgress(100); waitRef.current?.resolve(); waitRef.current = null; }),
       // «Смотреть» в уведомлении «хайлайт готов» — открываем клип на вкладке «Хайлайты»
       listen("open-clip", (e) => { setOpenClip(String(e.payload)); setTab(HIGHLIGHTS_TAB); }),
       listen("open-home", () => setTab(HOME_TAB)),

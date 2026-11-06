@@ -193,6 +193,42 @@
 .pf-gun:first-child .pf-bar i { background: linear-gradient(90deg, var(--yellow), #ffe37a); }
 .pf-gun b { text-align: right; }
 
+/* достижения (Achievements.jsx); --c — цвет ступени: бронза, серебро, золото */
+.pf-badge--ach { color: var(--c); border-color: color-mix(in srgb, var(--c) 55%, transparent); background: color-mix(in srgb, var(--c) 10%, rgba(0,0,0,.35)); }
+.pf-badge--ach em { font-style: normal; font-size: .85rem; line-height: 1; }
+.pf-ach__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+.pf-ach__item {
+  display: flex; gap: 12px; align-items: flex-start; padding: 12px; min-width: 0;
+  background: color-mix(in srgb, var(--c) 6%, rgba(0,0,0,.25)); border: 1px solid color-mix(in srgb, var(--c) 38%, var(--line));
+  animation: pf-in .4s calc(var(--i, 0) * 25ms) cubic-bezier(.2,.8,.2,1) both; transition: border-color .2s, transform .2s;
+}
+.pf-ach__item:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--c) 70%, var(--line)); }
+.pf-ach__item.is-locked { background: rgba(0,0,0,.2); border-color: var(--line); }
+.pf-ach__item.is-locked .pf-ach__icon { filter: grayscale(1); opacity: .45; }
+.pf-ach__icon {
+  position: relative; flex: none; width: 46px; height: 46px; display: grid; place-items: center;
+  font-size: 1.35rem; color: var(--c); border: 2px solid var(--c);
+  background: radial-gradient(circle at 50% 35%, color-mix(in srgb, var(--c) 28%, transparent), transparent 70%);
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+}
+.pf-ach__item.is-max .pf-ach__icon { box-shadow: 0 0 18px color-mix(in srgb, var(--c) 55%, transparent); }
+.pf-ach__pips { position: absolute; bottom: 4px; display: flex; gap: 2px; }
+.pf-ach__pips b { width: 4px; height: 4px; background: rgba(255,255,255,.18); }
+.pf-ach__pips b.on { background: var(--c); }
+.pf-ach__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.pf-ach__top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.pf-ach__top b { font: 700 .92rem var(--ui); color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pf-ach__item.is-locked .pf-ach__top b { color: var(--text); }
+.pf-ach__tier { flex: none; font-size: .62rem; letter-spacing: .1em; text-transform: uppercase; color: var(--c); }
+.pf-ach__desc { font-size: .76rem; line-height: 1.35; }
+.pf-ach__prog { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.pf-ach__prog .pf-bar { flex: 1; }
+.pf-ach__prog .pf-bar i { background: var(--c); }
+.pf-ach__item.is-locked .pf-ach__prog .pf-bar i { background: var(--teal); }
+.pf-ach__prog .mono { flex: none; font-size: .68rem; }
+.pf-ach__more { margin-top: 12px; }
+.pf-ach__note { margin-top: 12px !important; font-size: .72rem; }
+
 /* загрузка */
 .pf-skel > div, .pf-skel .pf-tiles > div { background: linear-gradient(90deg, var(--panel) 0%, #121924 50%, var(--panel) 100%); background-size: 200% 100%; border: 1px solid var(--line); animation: pf-shimmer 1.2s linear infinite; }
 .pf-skel__hero { height: 230px; }

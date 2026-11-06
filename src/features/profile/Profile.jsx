@@ -9,6 +9,8 @@ import { mapName, mapTint } from "../match/dossier";
 import { LEVELS, LVL_COLOR, num, pct, pad, mapId, gameTime, fetchPlayer, summarize } from "./data";
 import { Friends } from "./Friends";
 import { Compare } from "./Compare";
+import { Achievements } from "./Achievements";
+import { evaluate, topBadges, TIER_COLOR } from "./badges";
 import "./profile.css";
 import "./compare.css";
 
@@ -115,6 +117,7 @@ export function Profile({ faceitKey, onGoSettings }) {
   hist.forEach((m) => Object.entries(m.weapons || {}).forEach(([w, n]) => { guns[w] = (guns[w] || 0) + n; }));
   const topGuns = Object.entries(guns).sort((a, b) => b[1] - a[1]).slice(0, 5);
   const hlRounds = hist.flatMap((m) => m.rounds || []).filter((r) => r.tags?.length);
+  const best = data?.own ? topBadges(evaluate(home?.history), 3) : [];
   const aces = hlRounds.filter((r) => r.kills >= 5).length, fours = hlRounds.filter((r) => r.kills === 4).length;
 
   const open = (url) => url && invoke("open_profile_link", { url }).catch(() => {});
@@ -203,6 +206,11 @@ export function Profile({ faceitKey, onGoSettings }) {
                   {s?.online && (s.vac ? <span className="pf-badge is-bad"><i />{tr("VAC-бан")}</span> : <span className="pf-badge is-ok"><i />{tr("банов нет")}</span>)}
                   {s?.trade_ban && s.trade_ban !== "None" && <span className="pf-badge is-bad"><i />{tr("бан обмена")}</span>}
                   {s?.limited && <span className="pf-badge is-warn"><i />{tr("ограниченный аккаунт")}</span>}
+                  {best.map((b) => (
+                    <span key={b.id} className="pf-badge pf-badge--ach" style={{ "--c": TIER_COLOR[b.level] }} title={tr(b.desc, b.next)}>
+                      <em>{b.icon}</em>{tr(b.name)}
+                    </span>
+                  ))}
                   {p?.verified && <span className="pf-badge is-ok"><i />{tr("FACEIT: подтверждён")}</span>}
                   {p?.country && <span className="pf-badge mono">{String(p.country).toUpperCase()}{p.region ? ` · ${p.region}` : ""}</span>}
                   {s?.since && <span className="pf-badge mono">{tr("Steam с {0}", s.since.replace(/^[A-Za-z]+ \d+, /, ""))}</span>}
@@ -337,6 +345,9 @@ export function Profile({ faceitKey, onGoSettings }) {
                 </div>
               </section>
             )}
+
+            {/* достижения (Achievements.jsx, badges.js) */}
+            {data.own && <Achievements history={home?.history} />}
           </div>
         </div>
       )}

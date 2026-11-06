@@ -2,6 +2,7 @@
 import { mapName, mapTint } from "./dossier";
 
 import { tr } from "../../i18n";
+import { TIER_COLOR } from "../profile/badges";
 const W = 1080, H = 1920, PAD = 80;
 const C = { bg: "#07090d", line: "#1c2430", lineHi: "#2c3a4b", text: "#d6dde6", dim: "#6c7a8c", yellow: "#f5c518", teal: "#2ee6c0", red: "#e5484d" };
 const DISPLAY = '"Unbounded", sans-serif';
@@ -48,7 +49,7 @@ function corners(ctx, x, y, w, h, color, len = 34) {
   ctx.stroke();
 }
 
-export async function drawCard({ info, player: p, faceit }) {
+export async function drawCard({ info, player: p, faceit, badges = [] }) {
   await Promise.all([
     // шрифты Google разбиты по алфавитам (unicode-range) — грузим и латиницу, и кириллицу
     ...[`800 100px ${DISPLAY}`, `600 30px ${MONO}`, `400 30px ${MONO}`].map((f) => document.fonts.load(f, "Aa0 Яя")),
@@ -124,6 +125,27 @@ export async function drawCard({ info, player: p, faceit }) {
     ctx.strokeStyle = res[1]; ctx.lineWidth = 2; ctx.strokeRect(PAD + 1, 671, w - 2, 74);
     ctx.fillStyle = res[1]; ctx.textAlign = "left";
     ctx.fillText(res[0].toUpperCase(), PAD + 32, 725);
+  }
+
+  // лучшие достижения своего аккаунта (profile/badges.js) — справа от итога, сколько влезет
+  {
+    ctx.font = `800 40px ${DISPLAY}`;
+    let x = PAD + (res ? ctx.measureText(res[0].toUpperCase()).width + 64 + 18 : 0);
+    for (const b of badges) {
+      const c = TIER_COLOR[b.level] || C.yellow, name = tr(b.name).toUpperCase();
+      ctx.font = `600 22px ${MONO}`; ctx.letterSpacing = "3px"; // как в label()
+      const w = 76 + ctx.measureText(name).width + 24;
+      ctx.letterSpacing = "0px";
+      if (x + w > W - PAD) break;
+      box(ctx, x, 670, w, 76, hexA(c, 0.7), hexA(c, 0.1));
+      ctx.save();
+      ctx.shadowColor = hexA(c, 0.6); ctx.shadowBlur = 18;
+      ctx.font = `700 34px ${DISPLAY}, "Segoe UI Symbol", sans-serif`; ctx.fillStyle = c; ctx.textAlign = "center";
+      ctx.fillText(b.icon, x + 42, 721);
+      ctx.restore();
+      label(ctx, name, x + 76, 717, c, 22);
+      x += w + 14;
+    }
   }
 
   // игрок
