@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://beandx.github.io/clipforge/sitemap.xml

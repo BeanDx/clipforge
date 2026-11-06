@@ -26,6 +26,8 @@ dist-ssr
 # clipforge
 *.dem
 *.mp4
+# ролики лендинга (site/make-media.mjs) — исключение
+!site/media/*.mp4
 src-tauri/target
 src-tauri/parser
 

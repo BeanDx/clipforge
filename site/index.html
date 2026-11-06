@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>clipforge — хайлайты CS2 из демок в один клик, бесплатно</title>
+  <meta name="description" content="Бесплатная программа для хайлайтов CS2: кидаешь демку, получаешь готовый эдит для TikTok и YouTube. Умная выборка моментов, slow-mo, музыка с 3D-текстом песни, скины, повтор глазами убитого. Локально, без подписки, open source.">
+  <!-- одна страница на двух языках: ?lang=ru / ?lang=en (main.js), поисковикам — обе версии -->
+  <link rel="alternate" hreflang="ru" href="https://beandx.github.io/clipforge/?lang=ru">
+  <link rel="alternate" hreflang="en" href="https://beandx.github.io/clipforge/?lang=en">
+  <link rel="alternate" hreflang="x-default" href="https://beandx.github.io/clipforge/">
+  <!-- превью ссылки в Discord / Telegram / X: картинка — PNG по полному адресу (иначе не все её показывают).
+       Если появится свой домен — поменять адреса тут и в og:url. -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="clipforge">
+  <meta property="og:url" content="https://beandx.github.io/clipforge/">
+  <meta property="og:title" content="clipforge — CS2 демки в готовые эдиты">
+  <meta property="og:description" content="Умные моменты, slow-mo, музыка с 3D-текстом песни, скины, POV убитого. Бесплатно и с открытым кодом.">
+  <meta property="og:image" content="https://beandx.github.io/clipforge/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://beandx.github.io/clipforge/og.png">
+  <link rel="canonical" href="https://beandx.github.io/clipforge/">
+  <meta name="theme-color" content="#07090d">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' fill='%2307090d' stroke='%23f5c518' stroke-width='4'/%3E%3Crect x='10' y='10' width='12' height='12' fill='%232ee6c0'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Exo+2:wght@400;500;600;700&family=Unbounded:wght@600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    { "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    } }
+  </script>
+  <!-- карточка приложения и FAQ для поисковиков (schema.org) -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "clipforge",
+    "alternateName": ["clipforge CS2", "CS2 highlight maker"],
+    "description": "Free Windows app that turns Counter-Strike 2 demos into ready-to-post highlight edits: smart moment picking, slow motion, music with 3D lyrics, skins and a victim POV replay. Records through HLAE, renders locally.",
+    "operatingSystem": "Windows 10, Windows 11",
+    "applicationCategory": "MultimediaApplication",
+    "applicationSubCategory": "Video editing",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "downloadUrl": "https://github.com/BeanDx/clipforge/releases/latest",
+    "url": "https://beandx.github.io/clipforge/",
+    "image": "https://beandx.github.io/clipforge/og.png",
+    "screenshot": "https://beandx.github.io/clipforge/shots/demo-en.webp",
+    "license": "https://opensource.org/licenses/MIT",
+    "isAccessibleForFree": true,
+    "inLanguage": ["en", "ru"],
+    "author": { "@type": "Person", "name": "BeanDx", "url": "https://github.com/BeanDx" },
+    "codeRepository": "https://github.com/BeanDx/clipforge"
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      { "@type": "Question", "name": "How do I make a CS2 highlight from a demo for free?",
+        "acceptedAnswer": { "@type": "Answer", "text": "Install clipforge, drop a .dem file (FACEIT, matchmaking, Premier or SourceTV), pick the moments it found and press render. CS2 records the frames through HLAE and clipforge builds the edit with slow-mo, music and effects. It is free and open source." } },
+      { "@type": "Question", "name": "Will I get VAC banned?",
+        "acceptedAnswer": { "@type": "Answer", "text": "CS2 starts through HLAE with -insecure, so VAC is off for that session and you can't join secured servers with it. clipforge only plays demos on your PC. Start CS2 normally before matchmaking." } },
+      { "@type": "Question", "name": "Is clipforge a free alternative to cloud highlight services?",
+        "acceptedAnswer": { "@type": "Answer", "text": "Yes. clipforge is free, open source under MIT and renders on your own PC: no queues, no subscriptions and no quality limits. It also adds music with 3D lyrics, skin changes and a victim POV replay." } }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <div class="hazard" aria-hidden="true"></div>
+
+  <header class="nav" id="nav">
+    <a class="logo" href="#top" aria-label="clipforge">
+      <i class="logo__mark" aria-hidden="true"></i><span>clipforge</span><em class="logo__tag mono">cs2</em>
+    </a>
+    <nav class="nav__links" aria-label="sections">
+      <a href="#how" data-i18n="nav.how">Как работает</a>
+      <a href="#score" data-i18n="nav.score">Моменты</a>
+      <a href="#features" data-i18n="nav.features">Возможности</a>
+      <a href="#deps" data-i18n="nav.deps">Что нужно</a>
+      <a href="#faq" data-i18n="nav.faq">Вопросы</a>
+    </nav>
+    <div class="nav__right">
+      <button type="button" class="lang mono" id="lang" aria-label="language"><b data-l="ru">RU</b><span>/</span><b data-l="en">EN</b></button>
+      <a class="gh mono" href="https://github.com/BeanDx/clipforge" target="_blank" rel="noopener" aria-label="GitHub">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        <span id="stars">★</span>
+      </a>
+      <a class="btn btn--sm" href="#download" data-i18n="nav.dl">Скачать</a>
+    </div>
+  </header>
+
+  <main id="top">
+    <!-- герой: 3D-кузница (scene.js) -->
+    <section class="hero">
+      <canvas id="scene" aria-hidden="true"></canvas>
+      <div class="hero__fallback" aria-hidden="true"></div>
+      <div class="hero__inner">
+        <p class="kicker mono reveal"><span class="dot"></span><span data-i18n="hero.kicker">бесплатно · локально · open source</span></p>
+        <h1 class="hero__title reveal">
+          <span data-i18n="hero.t1">CS2 демки</span>
+          <span class="arrow">→</span>
+          <span class="hl" data-i18n="hero.t2">готовые эдиты</span>
+          <span class="hero__t3" data-i18n="hero.t3">в один клик</span>
+        </h1>
+        <p class="hero__sub reveal" data-i18n="hero.sub">clipforge сам находит лучшие моменты, записывает их в игре через HLAE и добавляет slow-mo, музыку с 3D-текстом песни, скины и повтор глазами убитого. Видеоредактор не нужен.</p>
+        <div class="hero__cta reveal">
+          <a class="btn btn--big js-dl" href="https://github.com/BeanDx/clipforge/releases/latest">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 21h16"/></svg>
+            <span><b data-i18n="hero.dl">Скачать для Windows</b><small class="mono js-ver">последний релиз</small></span>
+          </a>
+          <a class="btn btn--ghost" href="#how" data-i18n="hero.how">Как это работает ↓</a>
+        </div>
+        <ul class="hero__chips mono reveal">
+          <li><b>CLUTCH</b> 1v3</li><li><b>MOMENT</b> EPIC 115</li><li><b>ACE</b> 5K</li>
+        </ul>
+      </div>
+      <div class="scroll-hint mono" aria-hidden="true"><span data-i18n="hero.scroll">листай</span><i></i></div>
+    </section>
+
+    <!-- бегущая строка меток -->
+    <div class="ticker mono" aria-hidden="true">
+      <div class="ticker__track">
+        <span>ACE</span><span>CLUTCH 1v4</span><span>NO-SCOPE</span><span>WALLBANG</span><span>THROUGH SMOKE</span><span>NINJA DEFUSE</span><span>3K IN 2.1 S</span><span>COLLATERAL</span><span>JUMPSHOT</span><span>45 M</span><span>ECO</span><span>LEGENDARY</span>
+        <span>ACE</span><span>CLUTCH 1v4</span><span>NO-SCOPE</span><span>WALLBANG</span><span>THROUGH SMOKE</span><span>NINJA DEFUSE</span><span>3K IN 2.1 S</span><span>COLLATERAL</span><span>JUMPSHOT</span><span>45 M</span><span>ECO</span><span>LEGENDARY</span>
+      </div>
+    </div>
+
+    <!-- шоурил: готовый эдит из clipforge (site/media) -->
+    <section class="sec reel" id="reel">
+      <header class="sec__head reveal">
+        <span class="sec__num mono">01</span>
+        <h2 data-i18n="rl.title">Так выглядит результат</h2>
+        <p data-i18n="rl.sub">Это не монтаж в редакторе. Демка, пресет «Ночной эдит» и одна кнопка.</p>
+      </header>
+      <div class="reel__frame reveal">
+        <i class="stage__corner"></i>
+        <video id="reelVideo" src="media/reel.mp4" poster="media/reel.jpg" muted loop playsinline preload="metadata"></video>
+        <span class="reel__tag mono"><i></i>made with clipforge</span>
+        <span class="reel__note mono" id="reelNote" hidden>♪ <span data-i18n="rl.note">текст песни на любом языке</span></span>
+        <button type="button" class="reel__play mono" id="reelPlay" aria-label="play / pause">❚❚</button>
+      </div>
+      <!-- шторка «до / после»: появляется, если есть media/before.mp4 и media/after.mp4 (site/make-media.mjs) -->
+      <div class="ba reveal" id="ba" hidden>
+        <div class="ba__frame" id="baFrame">
+          <video id="baAfter" muted loop playsinline preload="metadata"></video>
+          <div class="ba__before" id="baClip"><video id="baBefore" muted loop playsinline preload="metadata"></video></div>
+          <div class="ba__handle" id="baHandle" role="slider" tabindex="0" aria-label="before / after" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50"><i></i></div>
+          <span class="ba__lbl ba__lbl--l mono" data-i18n="ba.before">сырая демка</span>
+          <span class="ba__lbl ba__lbl--r mono" data-i18n="ba.after">clipforge</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- как работает: прокрутка ведёт по шагам -->
+    <section class="sec how" id="how">
+      <header class="sec__head reveal">
+        <span class="sec__num mono">02</span>
+        <h2 data-i18n="how.title">От <code>.dem</code> до <code>.mp4</code></h2>
+        <p data-i18n="how.sub">Пять шагов. Ты делаешь два из них: кидаешь демку и жмёшь F10.</p>
+      </header>
+      <div class="how__grid">
+        <div class="how__stage" aria-hidden="true">
+          <div class="stage" id="stage" data-step="0">
+            <i class="stage__corner"></i>
+            <!-- 0: демка -->
+            <div class="st st-0">
+              <div class="drop"><div class="file mono"><b>.DEM</b><span>faceit-match.dem</span><small>283.5 MB</small></div></div>
+            </div>
+            <!-- 1: разбор -->
+            <div class="st st-1">
+              <div class="parse mono">
+                <div class="parse__nums"><div><b data-count="170">0</b><span data-i18n="st.kills">киллов</span></div><div><b data-count="23">0</b><span data-i18n="st.rounds">раундов</span></div><div><b data-count="10">0</b><span data-i18n="st.players">игроков</span></div></div>
+                <div class="feed"><div class="feed__track">
+                  <p><b class="t">shadow</b> <i>AK-47</i> ⊕ <b class="c">kairo</b></p><p><b class="c">nova</b> <i>AWP</i> ▦ <b class="t">ashen</b></p><p><b class="t">shadow</b> <i>AK-47</i> ⊕ <b class="c">zeph</b></p><p><b class="c">mika</b> <i>M4A1-S</i> <b class="t">tarek</b></p><p><b class="t">shadow</b> <i>Desert Eagle</i> ⊕ <b class="c">riven</b></p><p><b class="t">frost</b> <i>Glock-18</i> <b class="c">nova</b></p><p><b class="c">kairo</b> <i>AWP</i> ◎ <b class="t">frost</b></p><p><b class="t">shadow</b> <i>knife</i> † <b class="c">mika</b></p>
+                  <p><b class="t">shadow</b> <i>AK-47</i> ⊕ <b class="c">kairo</b></p><p><b class="c">nova</b> <i>AWP</i> ▦ <b class="t">ashen</b></p><p><b class="t">shadow</b> <i>AK-47</i> ⊕ <b class="c">zeph</b></p><p><b class="c">mika</b> <i>M4A1-S</i> <b class="t">tarek</b></p>
+                </div></div>
+              </div>
+            </div>
+            <!-- 2: моменты на шкале раундов -->
+            <div class="st st-2">
+              <div class="rounds">
+                <div class="rounds__bars"></div>
+                <div class="rounds__pick mono"><span class="tier t-legend">LEGEND · R14 · ACE</span><span class="tier t-epic">EPIC · R7 · 1v3</span><span class="tier t-top">TOP · R19 · 3K</span></div>
+              </div>
+            </div>
+            <!-- 3: запись в игре -->
+            <div class="st st-3">
+              <div class="rec">
+                <div class="rec__screen"><span class="rec__dot mono">● REC</span><span class="rec__frames mono">frame <b>0</b></span><div class="rec__cross"></div><div class="rec__hint mono"><kbd>F10</kbd> <span data-i18n="st.f10">старт записи</span></div></div>
+                <div class="rec__bar"><i></i></div>
+              </div>
+            </div>
+            <!-- 4: сборка -->
+            <div class="st st-4">
+              <div class="layers mono">
+                <div class="layer" style="--i:0">slow-mo · rubberband</div>
+                <div class="layer" style="--i:1">♪ music · beat zoom</div>
+                <div class="layer" style="--i:2">3D lyrics · karaoke</div>
+                <div class="layer" style="--i:3">kill flash · hs zoom</div>
+                <div class="layer" style="--i:4">victim POV replay</div>
+                <div class="out"><span class="out__play">▶</span><b>highlight.mp4</b><small>1080p · 60 fps · NVENC</small></div>
+              </div>
+            </div>
+          </div>
+          <ol class="how__dots" id="howDots"><li></li><li></li><li></li><li></li><li></li></ol>
+        </div>
+        <ol class="how__steps" id="steps">
+          <li class="step" data-i="0"><span class="step__n mono">01</span><h3 data-i18n="s0.t">Кидаешь демку</h3><p data-i18n="s0.d">FACEIT, матчмейкинг, Premier или SourceTV с community-серверов. Демки FACEIT можно скачать прямо из приложения.</p></li>
+          <li class="step" data-i="1"><span class="step__n mono">02</span><h3 data-i18n="s1.t">Демка разбирается</h3><p data-i18n="s1.d">demoparser2 достаёт все киллы, урон, позиции, раунды и экипировку. Плюс досье матча: коды прицелов, контрстрейф, TTK, открытия.</p></li>
+          <li class="step" data-i="2"><span class="step__n mono">03</span><h3 data-i18n="s2.t">Моменты находятся сами</h3><p data-i18n="s2.d">Каждый раунд каждого игрока получает баллы: мультикиллы, настоящие клатчи 1vN, прострелы, no-scope, эко, ниндзя-дефьюзы. Лучшие выбраны заранее.</p></li>
+          <li class="step" data-i="3"><span class="step__n mono">04</span><h3 data-i18n="s3.t">CS2 пишет кадры</h3><p data-i18n="s3.d">Игра запускается через HLAE, ты жмёшь F10, и кадры пишутся прямо из движка. Можно свернуть игру и заниматься своими делами.</p></li>
+          <li class="step" data-i="4"><span class="step__n mono">05</span><h3 data-i18n="s4.t">ffmpeg собирает эдит</h3><p data-i18n="s4.d">Slow-mo, музыка, 3D-текст песни, вспышки, зум на хедшот и повтор глазами убитого. Приходит уведомление, клип лежит в галерее.</p></li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- интерактив: собери момент, посчитай баллы как в приложении -->
+    <section class="sec score" id="score">
+      <header class="sec__head reveal">
+        <span class="sec__num mono">03</span>
+        <h2 data-i18n="sc.title">Собери свой момент</h2>
+        <p data-i18n="sc.sub">Те же правила и те же баллы, что внутри clipforge. Попробуй дотянуть до «Легенды».</p>
+      </header>
+      <div class="scorer reveal">
+        <div class="scorer__controls">
+          <div class="ctl">
+            <label class="mono" for="kills"><span data-i18n="sc.kills">киллы за раунд</span> <b id="killsV">3</b></label>
+            <input type="range" id="kills" min="1" max="5" value="3">
+          </div>
+          <div class="ctl">
+            <label class="mono" for="hs"><span data-i18n="sc.hs">из них в голову</span> <b id="hsV">2</b></label>
+            <input type="range" id="hs" min="0" max="3" value="2">
+          </div>
+          <div class="ctl">
+            <span class="mono ctl__lbl" data-i18n="sc.clutch">клатч</span>
+            <div class="seg" id="clutch" role="radiogroup">
+              <button type="button" class="on" data-v="0" data-i18n="sc.none">нет</button><button type="button" data-v="1">1v1</button><button type="button" data-v="2">1v2</button><button type="button" data-v="3">1v3</button><button type="button" data-v="4">1v4</button><button type="button" data-v="5">1v5</button>
+            </div>
+          </div>
+          <div class="ctl">
+            <span class="mono ctl__lbl" data-i18n="sc.style">как</span>
+            <div class="toggles" id="toggles">
+              <button type="button" data-k="wall">▦ <span data-i18n="tg.wall">сквозь стену</span></button>
+              <button type="button" data-k="smoke">☁ <span data-i18n="tg.smoke">через смок</span></button>
+              <button type="button" data-k="noscope">◎ no-scope</button>
+              <button type="button" data-k="air">⤒ <span data-i18n="tg.air">в прыжке</span></button>
+              <button type="button" data-k="blind">◐ <span data-i18n="tg.blind">ослеплённым</span></button>
+              <button type="button" data-k="knife">† <span data-i18n="tg.knife">ножом</span></button>
+              <button type="button" data-k="fast" class="on">⚡ <span data-i18n="tg.fast">за 3 секунды</span></button>
+              <button type="button" data-k="opening">▸ <span data-i18n="tg.opening">открытие</span></button>
+              <button type="button" data-k="eco">$ <span data-i18n="tg.eco">на эко</span></button>
+              <button type="button" data-k="decisive">♛ <span data-i18n="tg.decisive">решающий раунд</span></button>
+              <button type="button" data-k="ninja">☾ <span data-i18n="tg.ninja">ниндзя-дефьюз</span></button>
+            </div>
+          </div>
+        </div>
+        <div class="scorer__out" id="scoreOut">
+          <span class="mono scorer__lbl" data-i18n="sc.result">баллы момента</span>
+          <b class="scorer__num" id="scoreNum">0</b>
+          <span class="scorer__tier mono" id="scoreTier">—</span>
+          <div class="meter"><i id="meterFill"></i>
+            <span style="left:calc(25 / 180 * 100%)" class="mono">25</span><span style="left:calc(45 / 180 * 100%)" class="mono">45</span><span style="left:calc(80 / 180 * 100%)" class="mono">80</span><span style="left:calc(130 / 180 * 100%)" class="mono">130</span>
+          </div>
+          <div class="scorer__tags mono" id="scoreTags"></div>
+          <p class="scorer__note dim" id="scoreNote"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- своя демка прямо в браузере: разбор на WASM-парсере (site/parser), файл никуда не отправляется.
+         Блок показывается, только если парсер лежит рядом (см. site/README.md) -->
+    <section class="sec demo" id="try" hidden>
+      <header class="sec__head reveal">
+        <span class="sec__num mono">04</span>
+        <h2 data-i18n="dm.title">Кинь свою демку</h2>
+        <p data-i18n="dm.sub">Разбор идёт прямо в браузере, файл никуда не загружается. Увидишь свои лучшие моменты так, как их видит clipforge.</p>
+      </header>
+      <div class="dz reveal" id="dz">
+        <input type="file" id="dzFile" accept=".dem" hidden>
+        <div class="dz__idle" id="dzIdle">
+          <div class="file mono"><b>.DEM</b><span data-i18n="dm.drop">перетащи сюда или нажми</span><small data-i18n="dm.where">FACEIT, матчмейкинг, Premier, SourceTV</small></div>
+        </div>
+        <div class="dz__busy mono" id="dzBusy" hidden><i class="spin"></i><span id="dzMsg"></span><div class="dz__bar"><i id="dzBar"></i></div></div>
+        <div class="dz__res" id="dzRes" hidden>
+          <div class="dz__head">
+            <div><span class="mono dim" id="dzMap"></span><h3 id="dzTitle"></h3></div>
+            <label class="mono dz__pick"><span data-i18n="dm.player">игрок</span><select id="dzPlayer"></select></label>
+          </div>
+          <div class="dz__timeline" id="dzTimeline"></div>
+          <ol class="dz__list" id="dzList"></ol>
+          <div class="dz__cta">
+            <p data-i18n="dm.cta">Чтобы превратить эти моменты в видео с эффектами и музыкой, нужно приложение.</p>
+            <a class="btn js-dl" href="https://github.com/BeanDx/clipforge/releases/latest" data-i18n="dm.btn">Скачать clipforge</a>
+            <button type="button" class="btn btn--ghost" id="dzAgain" data-i18n="dm.again">другая демка</button>
+          </div>
+        </div>
+        <p class="dz__err mono" id="dzErr" hidden></p>
+      </div>
+    </section>
+
+    <!-- возможности -->
+    <section class="sec feats" id="features">
+      <header class="sec__head reveal">
+        <span class="sec__num mono">05</span>
+        <h2 data-i18n="ft.title">Выглядит как эдит, а не как запись экрана</h2>
+      </header>
+      <div class="bento">
+        <article class="card card--wide reveal tilt">
+          <div class="card__txt"><span class="card__ic">✦</span><h3 data-i18n="f1.t">Умная выборка моментов</h3><p data-i18n="f1.d">Мультикиллы с бонусом за скорость, клатчи 1vN, прострелы, no-scope, эко и пистолетки. Уровни от «Хорошо» до «Легенды».</p></div>
+          <img data-shot="moments" alt="" loading="lazy">
+        </article>
+        <article class="card reveal tilt">
+          <div class="card__txt"><span class="card__ic">◷</span><h3 data-i18n="f2.t">Slow-mo, вспышки, бит</h3><p data-i18n="f2.d">Плавное замедление вокруг киллов, звук через Rubber Band, вспышка на килле, зум на хедшот, тряска в такт басу.</p></div>
+          <img data-shot="studio-effects" alt="" loading="lazy">
+        </article>
+        <article class="card reveal tilt">
+          <div class="card__txt"><span class="card__ic">♪</span><h3 data-i18n="f3.t">Текст песни в 3D на карте</h3><p data-i18n="f3.d">Текст подтягивается с LRCLIB или размечается локальным Whisper. Висит внутри карты, припев падает на последний килл.</p></div>
+          <img data-shot="studio-sound" alt="" loading="lazy">
+        </article>
+        <article class="card reveal tilt">
+          <div class="card__txt"><span class="card__ic">◉</span><h3 data-i18n="f4.t">Глазами убитого</h3><p data-i18n="f4.d">После клипа каждый фраг повторяется от лица того, кого ты убил. Плюс облёт камерой после последнего килла.</p></div>
+          <img data-shot="studio-camera" alt="" loading="lazy">
+        </article>
+        <article class="card reveal tilt">
+          <div class="card__txt"><span class="card__ic">◆</span><h3 data-i18n="f5.t">Любые скины</h3><p data-i18n="f5.d">Оружие, нож и перчатки меняются в копии демки. Инвентарь и файлы игры никто не трогает.</p></div>
+          <div class="skins" aria-hidden="true"><i style="--h:330"></i><i style="--h:45"></i><i style="--h:170"></i><i style="--h:270"></i></div>
+        </article>
+        <article class="card card--wide reveal tilt">
+          <div class="card__txt"><span class="card__ic">▣</span><h3 data-i18n="f6.t">Досье матча и карточка игрока</h3><p data-i18n="f6.d">Коды прицелов в один клик, точность, контрстрейф, TTK, открытия. Карточка 1080×1920 для сторис и Discord.</p></div>
+          <img data-shot="card" alt="" loading="lazy" class="card__tall">
+        </article>
+        <article class="card reveal tilt">
+          <div class="card__txt"><span class="card__ic">▶</span><h3 data-i18n="f7.t">Галерея и «до / после»</h3><p data-i18n="f7.d">Все клипы с превью, фильтрами и плеером. Шторка: сырая демка против готового клипа.</p></div>
+          <img data-shot="gallery" alt="" loading="lazy">
+        </article>
+        <article class="card reveal tilt">
+          <div class="card__txt"><span class="card__ic">⚑</span><h3 data-i18n="f8.t">Не мешает играть</h3><p data-i18n="f8.d">Живые данные матча, закладки на хайлайты по F8, трей. В игре clipforge почти не ест ресурсы: 1005 против 977 FPS.</p></div>
+          <img data-shot="fps" alt="" loading="lazy">
+        </article>
+      </div>
+    </section>
+
+    <!-- 3D-текст песни: свои строчки на «карте» с караоке-подсветкой (lyrics3d.js) -->
+    <section class="sec lyr" id="lyrics">
+      <header class="sec__head reveal">
+        <span class="sec__num mono">06</span>
+        <h2 data-i18n="ly.title">Текст песни прямо в карте</h2>
+        <p data-i18n="ly.sub">Напиши строчку, и она встанет в 3D, как в клипе: слово за словом, в такт.</p>
+      </header>
+      <div class="lyr__box reveal">
+        <canvas id="lyrCanvas" aria-label="3D lyrics preview"></canvas>
+        <form class="lyr__form" id="lyrForm">
+          <input id="lyrInput" maxlength="48" spellcheck="false" autocomplete="off" aria-label="lyrics">
+          <div class="lyr__styles mono" id="lyrStyles">
+            <button type="button" class="on" data-s="accent" data-i18n="ly.accent">акцент</button>
+            <button type="button" data-s="neon" data-i18n="ly.neon">неон</button>
+            <button type="button" data-s="clean" data-i18n="ly.clean">чистый</button>
+          </div>
+          <button type="submit" class="btn btn--sm" data-i18n="ly.go">▶ играть</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- скриншоты -->
+    <section class="sec shots" id="shots">
+      <header class="sec__head reveal">
+        <span class="sec__num mono">07</span>
+        <h2 data-i18n="sh.title">Внутри приложения</h2>
+      </header>
+      <div class="shots__tabs mono" id="shotTabs" role="tablist">
+        <button type="button" class="on" data-s="demo" data-i18n="sh.demo">Демо</button>
+        <button type="button" data-s="moments" data-i18n="sh.moments">Моменты</button>
+        <button type="button" data-s="studio-effects" data-i18n="sh.fx">Эффекты</button>
+        <button type="button" data-s="gallery" data-i18n="sh.gallery">Хайлайты</button>
+        <button type="button" data-s="overlay" data-i18n="sh.overlay">Поверх игры</button>
+        <button type="button" data-s="settings" data-i18n="sh.settings">Настройки</button>
+      </div>
+      <div class="shots__frame reveal"><i class="stage__corner"></i><img id="shotImg" data-shot="demo" alt=""></div>
+    </section>
+
+    <!-- зависимости -->
+    <section class="sec deps" id="deps">
+      <header class="sec__head reveal">
+        <span class="sec__num mono">08</span>
+        <h2 data-i18n="dp.title">Что нужно</h2>
+        <p data-i18n="dp.sub">Почти всё приложение ставит само. От тебя нужны Windows и CS2.</p>
+      </header>
+      <div class="deps__grid">
+        <div class="dep reveal is-need"><b>Windows 10 / 11</b><span class="mono" data-i18n="dp.need">нужно</span><p data-i18n="dp.win">64-бит</p></div>
+        <div class="dep reveal is-need"><b>Counter-Strike 2</b><span class="mono" data-i18n="dp.need">нужно</span><p data-i18n="dp.cs">Из Steam, путь найдётся сам</p></div>
+        <div class="dep reveal is-auto"><b>HLAE</b><span class="mono" data-i18n="dp.auto">скачается само</span><p data-i18n="dp.hlae">Запись кадров из движка</p></div>
+        <div class="dep reveal is-auto"><b>ffmpeg</b><span class="mono" data-i18n="dp.auto">скачается само</span><p data-i18n="dp.ff">Сборка видео, NVENC / AMF / Quick Sync</p></div>
+        <div class="dep reveal is-in"><b>Node.js</b><span class="mono" data-i18n="dp.in">внутри установщика</span><p data-i18n="dp.node">Разбор демок</p></div>
+        <div class="dep reveal is-in"><b>WebView2</b><span class="mono" data-i18n="dp.sys">уже в Windows</span><p data-i18n="dp.wv">Интерфейс приложения</p></div>
+        <div class="dep reveal is-opt"><b>Whisper</b><span class="mono" data-i18n="dp.opt">по желанию</span><p data-i18n="dp.wh">Тайминг текста песни, ~170 МБ при первом использовании</p></div>
+        <div class="dep reveal is-opt"><b>FACEIT API key</b><span class="mono" data-i18n="dp.opt">по желанию</span><p data-i18n="dp.fc">Уровни и эло FACEIT, бесплатный ключ</p></div>
+      </div>
+    </section>
+
+    <!-- скачать -->
+    <section class="sec dl" id="download">
+      <div class="dl__box reveal">
+        <i class="stage__corner"></i>
+        <div class="dl__mark" aria-hidden="true"><i class="logo__mark logo__mark--big"></i></div>
+        <h2 data-i18n="dl.title">Забирай, это бесплатно</h2>
+        <p class="dl__meta mono"><span class="js-ver">—</span> · <span class="js-date">—</span> · <span class="js-size">—</span></p>
+        <a class="btn btn--big js-dl" href="https://github.com/BeanDx/clipforge/releases/latest">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 21h16"/></svg>
+          <span><b data-i18n="dl.btn">Скачать установщик</b><small class="mono js-file">clipforge_x64-setup.exe</small></span>
+        </a>
+        <div class="dl__alt mono">
+          <a class="js-msi" href="https://github.com/BeanDx/clipforge/releases/latest" data-i18n="dl.msi">MSI-пакет</a>
+          <a href="https://github.com/BeanDx/clipforge/releases" target="_blank" rel="noopener" data-i18n="dl.all">все релизы</a>
+          <a href="https://github.com/BeanDx/clipforge" target="_blank" rel="noopener" data-i18n="dl.src">исходный код</a>
+        </div>
+        <p class="dl__hash mono dim"><span>sha256</span> <code class="js-hash">—</code></p>
+        <p class="dl__note dim" data-i18n="dl.note">Обновления приходят сами внутри приложения.</p>
+      </div>
+
+      <!-- установка: главное — не испугаться SmartScreen (установщик без платной подписи) -->
+      <div class="inst" id="install">
+        <h3 class="inst__title reveal" data-i18n="in.title">Установка за минуту</h3>
+        <ol class="inst__steps">
+          <li class="reveal"><span class="mono">01</span><b data-i18n="in.1t">Запусти установщик</b><p data-i18n="in.1d">Файл <code>clipforge_x.y.z_x64-setup.exe</code> из папки «Загрузки».</p></li>
+          <li class="reveal inst__ss">
+            <span class="mono">02</span><b data-i18n="in.2t">Windows может предупредить</b>
+            <p data-i18n="in.2d">У установщика пока нет платного сертификата подписи, поэтому SmartScreen показывает синее окно. Нажми <b>«Подробнее»</b>, потом <b>«Выполнить в любом случае»</b>.</p>
+            <!-- схема окна SmartScreen; анимация показывает, куда нажимать -->
+            <div class="ss" aria-hidden="true">
+              <div class="ss__win" id="ssWin">
+                <p class="ss__h" data-i18n="ss.h">Система Windows защитила ваш компьютер</p>
+                <p class="ss__p" data-i18n="ss.p">Фильтр SmartScreen Microsoft Defender предотвратил запуск неопознанного приложения, которое может подвергнуть ваш компьютер риску.</p>
+                <p class="ss__more"><u data-i18n="ss.more">Подробнее</u><i class="ss__cur"></i></p>
+                <div class="ss__info mono"><span data-i18n="ss.app">Приложение:</span> clipforge_x64-setup.exe<br><span data-i18n="ss.pub">Издатель:</span> <span data-i18n="ss.unk">Неизвестный издатель</span></div>
+                <div class="ss__btns"><span class="ss__run" data-i18n="ss.run">Выполнить в любом случае</span><span data-i18n="ss.no">Не выполнять</span></div>
+              </div>
+            </div>
+          </li>
+          <li class="reveal"><span class="mono">03</span><b data-i18n="in.3t">Проверь файл, если хочешь</b><p data-i18n="in.3d">Хеш должен совпасть с тем, что выше. В PowerShell:</p>
+            <button type="button" class="inst__cmd mono" id="hashCmd" title="copy"><code>Get-FileHash "$env:USERPROFILE\Downloads\clipforge_*_x64-setup.exe"</code><span data-i18n="in.copy">копировать</span></button>
+            <p class="dim" data-i18n="in.3e">Исходный код открыт: установщик можно собрать самому.</p></li>
+          <li class="reveal"><span class="mono">04</span><b data-i18n="in.4t">Открой демку</b><p data-i18n="in.4d">HLAE и ffmpeg скачаются сами при первом запуске, пути к CS2 найдутся сами. Перетащи <code>.dem</code> во вкладку «Демо».</p></li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- что нового: последние релизы с GitHub -->
+    <section class="sec news" id="news" hidden>
+      <header class="sec__head reveal">
+        <span class="sec__num mono">09</span>
+        <h2 data-i18n="nw.title">Что нового</h2>
+        <p data-i18n="nw.sub">clipforge обновляется часто. Последние релизы с GitHub:</p>
+      </header>
+      <div class="news__list" id="newsList"></div>
+      <a class="news__all mono" href="https://github.com/BeanDx/clipforge/releases" target="_blank" rel="noopener" data-i18n="nw.all">вся история релизов →</a>
+    </section>
+
+    <!-- сообщество: ссылки из config.js; без ссылок блок скрыт -->
+    <section class="sec comm" id="community" hidden>
+      <div class="comm__box reveal">
+        <div><h2 data-i18n="cm.title">Присоединяйся</h2><p data-i18n="cm.sub">Кидай свои клипы, предлагай фичи, сообщай о багах.</p></div>
+        <div class="comm__links" id="commLinks"></div>
+      </div>
+    </section>
+
+    <!-- вопросы -->
+    <section class="sec faq" id="faq">
+      <header class="sec__head reveal">
+        <span class="sec__num mono">10</span>
+        <h2 data-i18n="fq.title">Вопросы</h2>
+      </header>
+      <div class="faq__list">
+        <details class="reveal"><summary data-i18n="q1">Меня не забанит VAC?</summary><p data-i18n="a1">CS2 запускается через HLAE с параметром <code>-insecure</code>: в этой сессии VAC выключен, и на защищённые серверы с ней не зайти. clipforge только проигрывает демки у тебя на компьютере. После рендера игра закрывается сама. Перед матчмейкингом просто запусти CS2 как обычно.</p></details>
+        <details class="reveal"><summary data-i18n="q2">Падает ли FPS, если держать программу открытой?</summary><p data-i18n="a2">Почти нет: 1005 и 977 FPS в среднем, около 3%, в пределах разброса. Пока ты в игре, clipforge ставит анимации на паузу и берёт около 0% процессора и ~270 МБ памяти.</p></details>
+        <details class="reveal"><summary data-i18n="q3">Какие демки подходят?</summary><p data-i18n="a3">Демки CS2 с FACEIT, из матчмейкинга Valve и Premier, а также SourceTV-демки с community-серверов.</p></details>
+        <details class="reveal"><summary data-i18n="q4">Кто-то увидит изменённые скины?</summary><p data-i18n="a4">Нет. clipforge записывает изменённую копию демки и пишет видео с неё. Инвентарь, игра и исходная демка остаются как были.</p></details>
+        <details class="reveal"><summary data-i18n="q5">Нужен ли ключ FACEIT API?</summary><p data-i18n="a5">Нет. Он нужен только для уровней и эло FACEIT. Всё остальное работает без него.</p></details>
+        <details class="reveal"><summary data-i18n="q7">Это замена Allstar или Medal?</summary><p data-i18n="a7">Задача та же: хайлайты CS2 без ручного монтажа. Разница в том, что clipforge работает по демке у тебя на компьютере: без очереди на сервере и подписки, в любом разрешении и FPS. Плюс то, чего обычно нет: музыка с 3D-текстом песни, смена скинов и повтор глазами убитого.</p></details>
+        <details class="reveal"><summary data-i18n="q6">Сколько это стоит?</summary><p data-i18n="a6">Нисколько. clipforge бесплатный, с открытым кодом под лицензией MIT. Видео рендерится на твоём компьютере: без очередей, подписок и ограничений по качеству.</p></details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <a class="logo" href="#top"><i class="logo__mark" aria-hidden="true"></i><span>clipforge</span></a>
+    <div class="foot__links mono" id="footLinks"></div>
+    <p class="mono dim" data-i18n="foot">MIT · не связан с Valve. Counter-Strike — торговая марка Valve Corporation.</p>
+    <a class="mono" href="https://github.com/BeanDx/clipforge" target="_blank" rel="noopener">github.com/BeanDx/clipforge</a>
+  </footer>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>
