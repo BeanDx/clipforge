@@ -14,6 +14,7 @@ mod sky;
 mod skins;
 mod toast;
 mod tray;
+mod valve;
 mod whisper;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -92,7 +93,9 @@ pub fn run() {
       tray::autostart_enabled,
       tray::set_autostart,
       preflight::preflight,
-      preflight::system_info
+      preflight::system_info,
+      valve::valve_recent,
+      valve::valve_download
     ])
     // крестик прячет окно в трей (если так выбрано в настройках)
     .on_window_event(|window, event| {

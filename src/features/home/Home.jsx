@@ -24,9 +24,17 @@ function when(t) {
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${hm}`;
 }
 const WD = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
-// итог матча: у режимов без команд (бой насмерть) победы нет — пишем сам режим
+// итог матча: у режимов без команд (бой насмерть) победы нет и «конца» тоже — пишем сам режим;
+// матч, конец которого программа не увидела (вышел раньше, закрыл игру), — «не доиграл»
 const resultOf = (m) => (m.result === "win" ? tr("победа") : m.result === "loss" ? tr("поражение") : m.result === "draw" ? tr("ничья")
-  : m.finished && roundless(m.mode) ? modeName(m.mode) : m.finished ? "" : tr("вышел"));
+  : roundless(m.mode) ? modeName(m.mode) : m.finished ? "" : tr("не доиграл"));
+const LEFT_HINT = "clipforge не увидел конец этого матча: ты вышел раньше или закрыл игру";
+const leftOf = (m) => !m.result && !m.finished && !roundless(m.mode);
+// карта на комьюнити-серверах приходит вместе с названием сервера: «de_dust2 | AWPDM #12 | Moscow — CYBERSHOKE.NET»
+const splitMap = (raw) => { const [map, ...rest] = String(raw || "").split(" | "); return { map: map.trim(), server: rest.join(" | ").trim() }; };
+// в истории не показываем бой насмерть и заходы короче 2 минут: демок у них нет, они только забивают список
+const SHORT_VISIT = 2 * 60_000;
+const noise = (m) => roundless(m.mode) || (m.ended || m.started) - m.started < SHORT_VISIT;
 
 // кэш разбора демок для тренда: путь|размер → статистика (разбор ~2 с на демку, второй раз не нужен)
 const STATS_KEY = "cf-home-demo-stats";
@@ -40,6 +48,16 @@ const faceitDemo = (f, replays) => f && replays.find((r) => r.path.toLowerCase()
 const faceitFor = (m, fc) => fc.find((f) => f.map === m.map && Math.abs(f.started - m.started) < 20 * 60_000)
   || fc.find((f) => (!f.map || f.map === m.map) && m.started >= f.started - 5 * 60_000 && m.started <= (f.finished || f.started + 3_600_000));
 const FC_WAIT = 10 * 60_000; // сколько ждём файл в «Загрузках» после нажатия «скачать демку»
+// матчмейкинг и Premier (valve.rs): список последних матчей у координатора Valve, хранится до следующего запроса
+const VALVE_KEY = "cf-valve-matches";
+const VALVE_AUTO = 30 * 60_000; // после первого ручного запроса список обновляется сам, если старше 30 минут
+const loadValve = () => { try { return JSON.parse(localStorage.getItem(VALVE_KEY)) || null; } catch { return null; } };
+// демка Valve узнаётся по имени файла: match730_<reservation>_<port>_<ip>.dem
+const valveDemo = (v, replays) => v && replays.find((r) => r.path.toLowerCase().includes(v.name));
+// матч из игры ↔ матч Valve: та же карта (если Valve её назвала) и начало игры внутри матча (±10 минут)
+const valveFor = (m, vm) => vm.find((v) => (!v.map || v.map === m.map)
+  && m.started >= v.started - (v.duration * 1000 + 10 * 60_000) && m.started <= v.started + v.duration * 1000 + 10 * 60_000);
+const mb = (x) => (x >= 100 ? Math.round(x) : x.toFixed(1));
 
 // сколько строк видно в свёрнутом списке
 const SHORT = 3;
@@ -80,6 +98,10 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
   const [fcAll, setFc] = useState([]); // последние матчи на FACEIT (faceit.rs)
   const [fcErr, setFcErr] = useState("");
   const [waiting, setWaiting] = useState(null); // { id, until } — ждём скачанную демку FACEIT
+  const [valve, setValve] = useState(loadValve); // { at, list } — матчи Valve
+  const [vBusy, setVBusy] = useState(false);
+  const [vErr, setVErr] = useState("");
+  const [vProg, setVProg] = useState({}); // id → [МБ, всего МБ], пока качается
 
   const refresh = () => invoke("gsi_home").then(setHome).catch(() => {});
   useEffect(() => {
@@ -138,9 +160,41 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
     ? <button type="button" className="hm-btn is-wait" onClick={() => setWaiting(null)} title={tr("Нажми на FACEIT «Watch demo» — clipforge сам заберёт файл из «Загрузок». Нажми, чтобы перестать ждать.")}>{tr("жду файл...")}</button>
     : <button type="button" className="hm-btn is-go" onClick={() => download(f)} title={tr("Откроет матч на FACEIT: нажми там «Watch demo», а clipforge сам заберёт демку из «Загрузок»")}>{tr("скачать демку")}</button>);
 
+  // матчи Valve: по кнопке, а дальше сами при открытии главной (если CS2 закрыта и список устарел)
+  const fetchValve = () => {
+    setVBusy(true); setVErr("");
+    invoke("valve_recent").then((list) => {
+      const v = { at: Date.now(), list };
+      setValve(v);
+      try { localStorage.setItem(VALVE_KEY, JSON.stringify(v)); } catch { /* нет места — просто не запомним */ }
+    }).catch((e) => setVErr(trError(e))).finally(() => setVBusy(false));
+  };
+  useEffect(() => {
+    if (!valve || Date.now() - valve.at < VALVE_AUTO) return;
+    invoke("cs2_running").then((r) => { if (!r) fetchValve(); }).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const un = listen("valve-progress", (e) => { const [id, d, t] = e.payload; setVProg((p) => (p[id] ? { ...p, [id]: [d, t] } : p)); });
+    return () => { un.then((f) => f()); };
+  }, []);
+  const downloadValve = (v) => {
+    setVErr("");
+    setVProg((p) => ({ ...p, [v.id]: [0, 0] }));
+    invoke("valve_download", { cs2, id: v.id, url: v.url, name: v.name, info: v.info })
+      .then(() => loadReplays())
+      .catch((e) => setVErr(trError(e)))
+      .finally(() => setVProg((p) => { const n = { ...p }; delete n[v.id]; return n; }));
+  };
+  const vBtn = (v) => {
+    const pr = vProg[v.id];
+    if (pr) return <button type="button" className="hm-btn is-wait" disabled>{pr[1] ? tr("качаю {0}/{1} МБ", mb(pr[0]), mb(pr[1])) : tr("качаю...")}</button>;
+    return <button type="button" className="hm-btn is-go" disabled={!cs2} onClick={() => downloadValve(v)} title={tr("Скачает демку с серверов Valve прямо в папку повторов CS2")}>{tr("скачать демку")}</button>;
+  };
+  const vm = valve?.list || [];
+
   const hist = home?.history || { matches: [], sessions: [], days: {} };
   const live = home?.live;
-  const matches = useMemo(() => [...hist.matches].sort((a, b) => b.started - a.started), [hist.matches]);
+  const matches = useMemo(() => hist.matches.map((m) => ({ ...m, ...splitMap(m.map) })).sort((a, b) => b.started - a.started), [hist.matches]);
   const now = Date.now();
   const week = matches.filter((m) => m.started >= now - 7 * DAY);
   const wk = week.reduce((a, m) => ({ k: a.k + m.kills, d: a.d + m.deaths, hs: a.hs + m.hs, w: a.w + (m.result === "win") }), { k: 0, d: 0, hs: 0, w: 0 });
@@ -163,7 +217,7 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
   // последняя сессия
   const lastS = [...(hist.sessions || [])].sort((a, b) => b.started - a.started)[0];
   const sm = lastS ? matches.filter((m) => lastS.matches.includes(m.id)) : [];
-  const sessRow = (m) => <li key={m.id}><span className="dim">{mapName(m.map)}</span><b className={`hm-res is-${m.result || (m.finished ? "none" : "left")}`}>{resultOf(m)} · {m.kills}/{m.deaths}</b></li>;
+  const sessRow = (m) => <li key={m.id}><span className="dim">{mapName(m.map)}</span><b className={`hm-res is-${m.result || (leftOf(m) ? "left" : "none")}`} title={leftOf(m) ? tr(LEFT_HINT) : undefined}>{resultOf(m)} · {m.kills}/{m.deaths}</b></li>;
   const ss = sm.reduce((a, m) => ({ k: a.k + m.kills, d: a.d + m.deaths, hs: a.hs + m.hs }), { k: 0, d: 0, hs: 0 });
   const bestRound = sm.flatMap((m) => m.rounds.map((r) => ({ ...r, map: m.map }))).sort((a, b) => b.kills - a.kills || b.hs - a.hs)[0];
   const guns = {};
@@ -172,20 +226,29 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
 
   // хайлайты из игры по свежим матчам
   const fcOf = (m) => faceitFor(m, fc);
-  const demoOf = (m) => faceitDemo(fcOf(m), replays) || demoFor(m, replays);
-  const highlights = matches.flatMap((m) => m.rounds.filter((r) => r.tags?.length).map((r) => ({ m, r, demo: demoOf(m), f: fcOf(m) }))).slice(0, 12);
+  // матч FACEIT не бывает матчем Valve
+  const vOf = (m) => (fcOf(m) ? undefined : valveFor(m, vm));
+  const demoOf = (m) => faceitDemo(fcOf(m), replays) || valveDemo(vOf(m), replays) || demoFor(m, replays);
+  const highlights = matches.flatMap((m) => m.rounds.filter((r) => r.tags?.length).map((r) => ({ m, r, demo: demoOf(m), f: fcOf(m), v: vOf(m) }))).slice(0, 12);
 
   // история: матчи из игры + скачанные демки, которых нет среди матчей
-  // + матчи FACEIT, которых игра не записала (программа была закрыта)
-  const gsiRows = matches.map((m) => ({ t: m.started, m, f: fcOf(m), demo: demoOf(m) }));
+  // + матчи FACEIT и Valve, которых игра не записала (программа была закрыта)
+  const shown = matches.filter((m) => !noise(m));
+  const hidden = matches.length - shown.length;
+  const gsiRows = shown.map((m) => ({ t: m.started, m, f: fcOf(m), v: vOf(m), demo: demoOf(m) }));
   const fcLinked = new Set(gsiRows.map((x) => x.f?.id).filter(Boolean));
   const fcRows = fc.filter((f) => !fcLinked.has(f.id)).map((f) => ({ t: f.started, f, demo: faceitDemo(f, replays) }));
-  const linked = new Set([...gsiRows, ...fcRows].map((x) => x.demo?.path).filter(Boolean));
+  const vLinked = new Set(gsiRows.map((x) => x.v?.id).filter(Boolean));
+  const vRows = vm.filter((v) => !vLinked.has(v.id)).map((v) => ({ t: v.started, v, demo: valveDemo(v, replays) }));
+  const linked = new Set([...gsiRows, ...fcRows, ...vRows].map((x) => x.demo?.path).filter(Boolean));
   const rows = [
-    ...gsiRows, ...fcRows,
+    ...gsiRows, ...fcRows, ...vRows,
     ...replays.filter((r) => !linked.has(r.path)).map((r) => ({ t: r.modified, demo: r })),
   ].sort((a, b) => b.t - a.t).slice(0, 30);
-  const fcRes = (f) => (f.result === "win" ? tr("победа") : f.result === "loss" ? tr("поражение") : "");
+  // где в списке матчи Valve: свежие бывают старше FACEIT и уходят под «показать все»
+  const vFirst = rows.findIndex((x) => x.v);
+  const vLast = vm[0];
+  const fcRes = (f) => (f.result === "win" ? tr("победа") : f.result === "loss" ? tr("поражение") : f.result === "draw" ? tr("ничья") : "");
 
   // тренд по демкам
   const trend = replays.map((r) => ({ r, s: stats[`${r.path}|${r.size}`] })).filter((x) => x.s).sort((a, b) => a.r.modified - b.r.modified).slice(-12);
@@ -345,7 +408,7 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
           <header className="hm-card__head"><h2>{tr("Хайлайты из игры")}</h2><span className="mono dim">{tr("3K, 4K, эйс, все в голову, нож и клавиша {0}", live?.mark_key || "F8")}</span></header>
           {highlights.length ? (
             <div className="hm-hl__list">
-              {highlights.map(({ m, r, demo, f }, i) => (
+              {highlights.map(({ m, r, demo, f, v }, i) => (
                 <div key={`${m.id}:${r.round}`} className="hm-hl__item" style={{ "--tint": mapTint(m.map), "--i": i }}>
                   <span className={`hm-hl__k ${r.kills >= 5 ? "is-ace" : r.kills >= 4 ? "is-4" : ""}`}>{r.kills >= 5 ? "ACE" : r.kills ? `${r.kills}K` : "★"}</span>
                   <div className="hm-hl__body">
@@ -355,7 +418,7 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
                   </div>
                   {demo
                     ? <button type="button" className="hm-btn is-go" onClick={() => onOpenEdit([demo.path])}>{tr("в эдит")}</button>
-                    : f ? dlBtn(f) : <span className="hm-hl__wait mono dim">{tr("скачай демку в «Смотреть»")}</span>}
+                    : f ? dlBtn(f) : v?.url ? vBtn(v) : <span className="hm-hl__wait mono dim">{tr("скачай демку в «Смотреть»")}</span>}
                 </div>
               ))}
             </div>
@@ -366,28 +429,47 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
 
         {/* история игр */}
         <section className="hm-card hm-hist span-2">
-          <header className="hm-card__head"><h2>{tr("История игр")}</h2><span className="mono dim">{tr("{0} матчей · {1} демок", matches.length, replays.length)}{fc.length ? ` · FACEIT ${fc.length}` : ""}</span></header>
+          <header className="hm-card__head"><h2>{tr("История игр")}</h2><span className="hm-hist__meta">
+            <span className="mono dim">{tr("{0} матчей · {1} демок", shown.length, replays.length)}{fc.length ? ` · FACEIT ${fc.length}` : ""}{vm.length ? ` · Valve ${vm.length}` : ""}
+              {hidden ? <span title={tr("Бой насмерть и заходы на сервер короче 2 минут в истории не показываются: демок у них нет")}>{tr(" · скрыто {0}", hidden)}</span> : null}</span>
+            <button type="button" className={`hm-btn ${vBusy ? "is-wait" : ""}`} disabled={vBusy} onClick={fetchValve}
+              title={tr("Спросит у Steam последние матчи матчмейкинга и Premier со ссылками на демки. CS2 должна быть закрыта")}>
+              {vBusy ? tr("спрашиваю Valve...") : valve ? tr("обновить матчи Valve") : tr("матчи Valve")}
+            </button>
+          </span></header>
           {fcErr && <p className="hm-note hm-err mono">{fcErr}</p>}
+          {vErr && <p className="hm-note hm-err mono">{vErr}</p>}
+          {valve && !vErr && !vBusy && (
+            <p className="hm-note dim">
+              {vLast ? tr("Valve: {0} матчей матчмейкинга и Premier, последний {1}.", vm.length, when(vLast.started)) : tr("Valve не нашёл у тебя матчей матчмейкинга и Premier.")}
+              {vFirst >= SHORT && !histOpen && <> {tr("Они ниже в списке:")} <button type="button" className="hm-link" onClick={() => setHistOpen(true)}>{tr("показать все")}</button></>}
+            </p>
+          )}
+          {!valve && !vErr && <p className="hm-note dim">{tr("Демки матчмейкинга и Premier: нажми «матчи Valve», и clipforge спросит у Steam последние матчи. Пароль не нужен, CS2 должна быть закрыта.")}</p>}
           {key.length < 32 && <p className="hm-note dim">{tr("Чтобы скачивать демки с FACEIT отсюда, укажи ключ FACEIT Data API в «Настройках».")}</p>}
           {rows.length ? (
             <div className="hm-rows">
-              {(() => { const histRow = ({ m, f, demo }) => {
+              {(() => { const histRow = ({ m, f, v, demo }) => {
                 const s = demo && stats[`${demo.path}|${demo.size}`];
-                const k = m ? m.kills : s?.kills, d = m ? m.deaths : s?.deaths, hs = m ? m.hs : s?.hs;
+                // без записи из игры: K/D из демки, а если её не разбирали — из данных Valve
+                const k = m ? m.kills : s ? s.kills : v?.kills, d = m ? m.deaths : s ? s.deaths : v?.deaths, hs = m ? m.hs : s?.hs;
+                const src = m || f || v || demo;
+                // новая карта, которую Valve не назвала: имя из демки
+                const map = (v && !v.map && demo?.map) || src.map;
                 const hl = m ? m.rounds.filter((r) => r.tags?.length).length : 0;
                 return (
-                  <div key={m?.id || f?.id || demo.path} className="hm-row" style={{ "--tint": mapTint((m || f || demo).map) }}>
-                    <span className="hm-row__map"><i />{mapName((m || f || demo).map) || "demo"}{f && <em className="hm-fc mono">FACEIT</em>}</span>
-                    <span className="mono dim hm-row__when">{when(m ? m.started : f ? f.started : demo.modified)}</span>
-                    <span className={`hm-res is-${m?.result || f?.result || (m && !m.finished ? "left" : "none")}`}>
-                      {m ? (resultOf(m)) : f ? fcRes(f) : tr("демка")}
+                  <div key={m?.id || f?.id || v?.id || demo.path} className="hm-row" style={{ "--tint": mapTint(map) }}>
+                    <span className="hm-row__map"><i /><span className="hm-row__name">{mapName(map) || "demo"}{m?.server && <small className="mono dim" title={m.server}>{m.server}</small>}</span>{f && <em className="hm-fc mono">FACEIT</em>}{!f && v && <em className="hm-fc hm-valve mono">{v.mode === "wingman" ? tr("2×2") : "VALVE"}</em>}</span>
+                    <span className="mono dim hm-row__when">{when(m ? m.started : f ? f.started : v ? v.started : demo.modified)}</span>
+                    <span className={`hm-res is-${m?.result || f?.result || v?.result || (m && leftOf(m) ? "left" : "none")}`} title={m && leftOf(m) ? tr(LEFT_HINT) : undefined}>
+                      {m ? (resultOf(m)) : f ? fcRes(f) : v ? fcRes(v) : tr("демка")}
                       {m && (m.score_ct || m.score_t) ? <b className="mono"> {m.team === "CT" ? `${m.score_ct}:${m.score_t}` : `${m.score_t}:${m.score_ct}`}</b>
-                        : !m && f?.score ? <b className="mono"> {f.score}</b> : null}
+                        : !m && (f || v)?.score ? <b className="mono"> {(f || v).score}</b> : null}
                     </span>
-                    <span className="mono hm-row__kd">{k != null ? `${k}/${d ?? "?"}` : "—"}<em>{k ? ` ${pct(hs, k)}% HS` : ""}</em></span>
+                    <span className="mono hm-row__kd">{k != null ? `${k}/${d ?? "?"}` : "—"}<em>{k && hs != null ? ` ${pct(hs, k)}% HS` : ""}</em></span>
                     <span className="hm-row__hl">{hl ? <em>★ {hl}</em> : null}{s?.taps ? <em className="is-tap">{tr("тапов {0}", s.taps)}</em> : null}</span>
                     <span className="hm-row__act">
-                      {demo ? <button type="button" className="hm-btn" onClick={() => onOpenDemo(demo.path)}>{tr("открыть")}</button> : f ? dlBtn(f) : <span className="mono dim">{tr("нет демки")}</span>}
+                      {demo ? <button type="button" className="hm-btn" onClick={() => onOpenDemo(demo.path)}>{tr("открыть")}</button> : f ? dlBtn(f) : v?.url ? vBtn(v) : <span className="mono dim">{tr("нет демки")}</span>}
                       {demo && <button type="button" className="hm-btn is-go" onClick={() => onOpenEdit([demo.path])}>{tr("в эдит")}</button>}
                     </span>
                   </div>

@@ -32,6 +32,7 @@ windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Graphic
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-single-instance = "2"
+bzip2 = "0.6"
 
 # Парсер демок без оптимизаций разбирает 160-мегабайтную демку минутами — ускоряем и в dev
 [profile.dev.package.source2-demo]

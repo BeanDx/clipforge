@@ -1527,6 +1527,11 @@
 .hm-btn.is-wait { border-color: var(--teal) !important; color: var(--teal); animation: hm-wait 1.2s ease-in-out infinite; }
 @keyframes hm-wait { 50% { opacity: .55; } }
 .hm-fc { font-size: .62rem; font-style: normal; font-weight: 700; padding: 1px 5px; color: #ff5500; border: 1px solid rgba(255,85,0,.5); }
+.hm-valve { color: #9fb6c9; border-color: rgba(159,182,201,.45); }
+.hm-row__name { display: flex; flex-direction: column; min-width: 0; }
+.hm-row__name small { font-size: .66rem; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
+.hm-link { padding: 0; border: 0 !important; background: none !important; color: var(--teal); font: inherit; text-decoration: underline; cursor: pointer; }
+.hm-hist__meta { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
 .hm-err { color: #ff6b6b; }
 
 .hm-rows { display: flex; flex-direction: column; }
