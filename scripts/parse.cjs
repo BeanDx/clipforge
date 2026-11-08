@@ -3,6 +3,10 @@ const { parseEvent, parsePlayerInfo, parseTicks } = require("@laihoe/demoparser2
 
 try {
   const file = process.argv[2];
+  // Сначала чиним демку FACEIT с курицей (иначе CS2 падает на playdemo) — сам файл, до разбора.
+  // Уже исправленная или обычная демка не меняется. Что-то пошло не так — просто разбираем как есть.
+  let fixed = null;
+  try { fixed = require("./fixdemo.cjs").fixInPlace(file); } catch {}
   // team_num — для клатчей и тимкиллов: сторона убийцы и жертвы (attacker_team_num / user_team_num)
   const events = parseEvent(file, "player_death", ["team_num"], ["total_rounds_played"]);
   // Порядок игроков в parsePlayerInfo совпадает с их слотом в демке
@@ -41,7 +45,7 @@ try {
     try { defuses = parseEvent(file, "bomb_defused", [], []).map((d) => ({ tick: d.tick, id: String(d.user_steamid) })); } catch {}
   } catch {}
 
-  const json = JSON.stringify({ size: fs.statSync(file).size, events, players, hurts, rounds, defuses, fires },
+  const json = JSON.stringify({ size: fs.statSync(file).size, events, players, hurts, rounds, defuses, fires, fixed },
     (_, v) => (typeof v === "bigint" ? v.toString() : v));
   process.stdout.write(json);
 } catch (e) {

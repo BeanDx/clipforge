@@ -134,10 +134,26 @@ fn unpack(src: &Path, kind: &str, dst: &Path) -> io::Result<()> {
     fs::rename(&tmp, dst).inspect_err(|_| { let _ = fs::remove_file(&tmp); })
 }
 
-// Забрать свежие (до 3 дней) демки FACEIT из «Загрузок» в csgo\replays. Возвращает новые пути.
+#[derive(Serialize)]
+pub struct Imported {
+    pub path: String,
+    pub fixed: bool, // демка была сломана (курица FACEIT, см. scripts/fixdemo.cjs) и исправлена
+}
+
+// Демки FACEIT с питомцем-курицей роняют CS2 на playdemo — чиним сразу, чтобы её можно было смотреть
+// и из самой игры. Не вышло — не страшно: parse.cjs попробует ещё раз при открытии демки.
+fn fix_chicken(dem: &Path) -> bool {
+    let Some(p) = dem.to_str() else { return false };
+    crate::render::run_node("fixdemo.cjs", &[p])
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .is_some_and(|v| v.is_object() && v.get("error").is_none())
+}
+
+// Забрать свежие (до 3 дней) демки FACEIT из «Загрузок» в csgo\replays. Возвращает новые демки.
 // Сам скачанный файл не трогаем — он остаётся в «Загрузках».
 #[tauri::command]
-pub async fn faceit_import(cs2: String) -> Result<Vec<String>, String> {
+pub async fn faceit_import(cs2: String) -> Result<Vec<Imported>, String> {
     let game = Path::new(&cs2).ancestors().nth(3).ok_or("нет пути к CS2")?;
     let replays = game.join("csgo").join("replays");
     fs::create_dir_all(&replays).map_err(|e| e.to_string())?;
@@ -156,7 +172,7 @@ pub async fn faceit_import(cs2: String) -> Result<Vec<String>, String> {
         if fs::metadata(&dst).is_ok_and(|m| m.len() > 0) { continue; }
         // один битый файл не мешает забрать остальные
         match unpack(&p, kind, &dst) {
-            Ok(()) => out.push(dst.to_string_lossy().into_owned()),
+            Ok(()) => out.push(Imported { fixed: fix_chicken(&dst), path: dst.to_string_lossy().into_owned() }),
             Err(e) => errs.push(format!("не получилось распаковать {name}: {e}")),
         }
     }

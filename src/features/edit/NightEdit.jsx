@@ -1,4 +1,4 @@
-// Вкладка «Эдит»: пресеты эдитов из нескольких демок. Пока один — Night Edit (как ночные TikTok-эдиты):
+// Режим «Эдит» вкладки «Демо»: пресеты эдитов из нескольких демок (Night Edit и Cinematic RTX). Night Edit (как ночные TikTok-эдиты):
 // интро ночью — звёздное небо с луной, сиреневый текст песни с сердцем, светящаяся пыль, рамка на цели,
 // светящееся оружие; дальше дневной монтаж лучших киллов, каждый ровно на удар трека.
 import { useState, useEffect, useRef, useMemo } from "react";
@@ -87,6 +87,24 @@ function NightPreview() {
   return <canvas ref={ref} width={960} height={540} className="ne-canvas" />;
 }
 
+// Превью пресета Cinematic RTX: кадр карты с «кино»-цветом, кинорамкой и бегущим бликом
+function CinePreview() {
+  return (
+    <div className="cn-preview">
+      <img src={previewBg} alt="" className="cn-preview__img" />
+      <i className="cn-preview__glow" />
+      <i className="cn-preview__bar cn-preview__bar--top" />
+      <i className="cn-preview__bar cn-preview__bar--bot" />
+    </div>
+  );
+}
+
+// Пресеты вкладки: у обоих одни шаги (демки, трек, моменты, сборка), разный вид записи
+const PRESETS = [
+  { id: "night", name: "Night Edit", badge: "PRESET 01" },
+  { id: "cine", name: "Cinematic", badge: "PRESET 02" },
+];
+
 const fmtT = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 const fmtLeft = (s) => (s >= 90 ? tr("~{0} мин", Math.round(s / 60)) : s >= 45 ? tr("~1 мин") : tr("~{0} с", Math.max(5, Math.round(s / 5) * 5)));
 
@@ -159,7 +177,7 @@ function EditProgress({ job, progress, stage }) {
   );
 }
 
-export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusic, video, playerId, rendering, progress, stage, renderPart, onDone, onGoSound, preset }) {
+export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusic, video, playerId, rendering, progress, stage, renderPart, onDone, onGoSound, preset, settings }) {
   const [replays, setReplays] = useState([]);
   const [chosen, setChosen] = useState(() => new Set());
   const [scan, setScan] = useState(null); // { me, groups: [...] }
@@ -172,6 +190,17 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
   const [textStyle, setTextStyle] = useState(() => { try { return localStorage.getItem("cf-edit-text") || "accent"; } catch { return "accent"; } });
   const [nightScope, setNightScope] = useState(() => { try { return localStorage.getItem("cf-edit-night") || "intro"; } catch { return "intro"; } });
   useEffect(() => { try { localStorage.setItem("cf-edit-text", textStyle); localStorage.setItem("cf-edit-night", nightScope); } catch {} }, [textStyle, nightScope]);
+  // какой пресет выбран; у Cinematic RTX свой текст (по слову на удар или без текста) и кинорамка
+  const [kind, setKind] = useState(() => { try { return localStorage.getItem("cf-edit-preset") === "cine" ? "cine" : "night"; } catch { return "night"; } });
+  const [cineText, setCineText] = useState(() => { try { return localStorage.getItem("cf-edit-cine-text") || "accent"; } catch { return "accent"; } });
+  const [letterbox, setLetterbox] = useState(() => { try { return localStorage.getItem("cf-edit-bars") !== "0"; } catch { return true; } });
+  useEffect(() => { try { localStorage.setItem("cf-edit-preset", kind); localStorage.setItem("cf-edit-cine-text", cineText); localStorage.setItem("cf-edit-bars", letterbox ? "1" : "0"); } catch {} }, [kind, cineText, letterbox]);
+  const cine = kind === "cine";
+  const textMode = cine ? cineText : textStyle;
+  const nightMode = cine ? "none" : nightScope;
+  // ReShade уже скачан? MSAA в CS2 включен (на время записи выключится)?
+  const [rs, setRs] = useState(null);
+  useEffect(() => { if (cine) invoke("reshade_status").then(setRs).catch(() => {}); }, [cine]);
   const [result, setResult] = useState(null);
   const [job, setJob] = useState(null); // ход сборки (EditProgress)
   const cancel = useRef(false);
@@ -319,7 +348,7 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
   const shortTrack = trackLeft != null && estSec > 0 && estSec > trackLeft;
   const canBuild = sel.length >= 2 && musicReady && !rendering && !busy && hlae && cs2 && out;
 
-  const sig = sel.map((g) => g.id).join("|") + "#" + (introG?.id || "") + "#" + nightScope + "#" + textStyle;
+  const sig = sel.map((g) => g.id).join("|") + "#" + (introG?.id || "") + "#" + nightMode + "#" + textMode + "#" + kind;
   const resumable = doneRef.current?.sig === sig && doneRef.current.demos.size > 0;
 
   // CS2 после рендера закрывается не мгновенно: следующий запуск сразу вслед падал при загрузке демки
@@ -336,16 +365,28 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
     else if (!resumable) doneRef.current = { sig, stamp: newStamp(), demos: new Map() };
     const stamp = recut ? newStamp() : doneRef.current.stamp;
     // текст Night уже вшит в интро при записи — у пересборки стиль текста тот, с которым писали
-    const ts = recut ? recut.textStyle : textStyle;
+    const ts = recut ? recut.textStyle : textMode;
+    // кинорамка — у пересборки как была у записи (картинка Cinematic уже с цветом «кино»)
+    const bars = recut ? !!recut.letterbox : cine && letterbox;
     try {
+      // Cinematic RTX: ReShade, аддон HLAE и шейдеры скачиваются один раз (~10 МБ)
+      if (!recut && cine) {
+        const un = await listen("reshade-progress", (e) => {
+          const [what, done, total] = e.payload;
+          setBusy(tr("скачиваю {0}: {1} МБ", what, total > 0 ? `${done.toFixed(1)} / ${total.toFixed(1)}` : done.toFixed(1)));
+        });
+        setBusy(tr("готовлю ReShade..."));
+        try { await invoke("ensure_reshade"); } finally { un(); }
+        invoke("reshade_status").then(setRs).catch(() => {});
+      }
       const base = await join(out, ".clipforge_edit", stamp);
       const parts = recut ? recut.parts : await recordParts(base);
       setBusy(tr("собираю эдит под бит..."));
       if (recut) setJob({ startedAt: Date.now(), total: 1, done: 1, phase: "cut", maps: [recut.maps], cut: { frac: 0, mb: 0 }, label: "" });
       else setJob((j) => ({ ...j, done: j.total, phase: "cut" }));
-      const file = await cutEdit(parts, base, stamp, ts);
+      const file = await cutEdit(parts, base, stamp, ts, bars, recut ? recut.kind : kind);
       if (!recut) {
-        const saved = { stamp, textStyle: ts, maps: job0Maps(), parts };
+        const saved = { stamp, textStyle: ts, maps: job0Maps(), parts, kind, letterbox: bars };
         try { localStorage.setItem("cf-edit-last", JSON.stringify(saved)); } catch {}
         setLast(saved);
       }
@@ -385,7 +426,7 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
       const clips = gs.map((g) => {
         const c = clipOf(g, {
           steamid: scan.me, name: g.name, slot: g.slot, intro: g === introG,
-          night: nightScope === "all" || (nightScope === "intro" && g === introG),
+          night: nightMode === "all" || (nightMode === "intro" && g === introG),
         });
         const box = bestSmoke && bestSmoke.demo === demoPath && c.boxTicks.includes(bestSmoke.tick) ? [bestSmoke.tick] : [];
         return { ...c, boxTicks: box, demo: demoPath };
@@ -402,7 +443,7 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
         : tr("запись демки: в игре нажми F10, когда демка загрузится"));
       const dir = await join(base, `r${doneDemos.size}`);
       await renderPart({ demoPath: todo[0].demoPath, steamid: scan.me, roster: todo[0].gs[0].roster,
-        clips: todo.flatMap((p) => p.clips), partsDir: dir, partLyrics: textStyle === "night" });
+        clips: todo.flatMap((p) => p.clips), partsDir: dir, partLyrics: textMode === "night", reshade: cine });
       // куски нумеруются подряд по всему заданию: part_00… сначала первой демки, потом следующей
       let first = 0;
       for (const p of todo) { doneDemos.set(p.demoPath, { dir, first }); first += p.clips.length; }
@@ -417,7 +458,7 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
   };
 
   // склейка под бит текущего трека: ритм, вспышки, текст «Акцент», музыка. Возвращает путь к эдиту
-  const cutEdit = async (parts, base, stamp, textStyle) => {
+  const cutEdit = async (parts, base, stamp, textStyle, bars = false, preset = "night") => {
     const unCut = await listen("montage-progress", (e) => setJob((j) => j && ({ ...j, cut: e.payload })));
     // порядок: интро, потом по нарастающей — самые крутые киллы в конце
     const intro0 = parts.find((p) => p.intro);
@@ -433,14 +474,14 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
     const rh = env && analyzeTrack(env);
     setBusy(tr("собираю эдит под бит..."));
     if (rh) {
-      if (textStyle === "accent" && intro0) {
+      if (textStyle !== "night" && intro0) {
         const need = rest.reduce((s, p) => s + p.info.kills.length, 0) * rh.P * 1.3 + 3;
         const d = pickDrop(rh, { from: start, introLen: intro0.info.dur + 0.5, need });
         start = d.start;
         dropAt = rh.beats[d.dropBeat] - start;
       }
       grid = gridFrom(rh, start);
-    } else if (textStyle === "accent" && music.lrc && intro0) {
+    } else if (textStyle !== "night" && music.lrc && intro0) {
       // трек не разобрался — по-старому: припев по тексту, первая повторяющаяся строка
       const ls = parseLrc(music.lrc).filter((l) => l.text);
       const key = (t) => t.toLowerCase().replace(/[^\p{L}\p{N} ]/gu, "").trim();
@@ -506,12 +547,12 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
       lyrics = { list: `${dir}\\lyrics.ffconcat`, mul: `${dir}\\lyrics_mul.ffconcat` };
       setBusy(tr("собираю эдит под бит..."));
     }
-    const file = await join(out, `${stamp.replace("_", " ")} night edit.mp4`);
+    const file = await join(out, `${stamp.replace("_", " ")} ${preset === "cine" ? "cinematic" : "night"} edit.mp4`);
     await invoke("build_montage", { m: {
       hlae, out: file, fps: video.fps, width: video.width, height: video.height, crf: video.crf, gpuEncoder: video.gpu,
       segments: plan.segments, whips: plan.whips, punches: plan.punches, flashes: plan.flashes,
       music: { path: music.path, start, musicVol: music.musicVol, gameVol: Math.min(music.gameVol, 0.55) },
-      lyrics: lyrics?.list ?? null, lyricsMul: lyrics?.mul ?? null,
+      lyrics: lyrics?.list ?? null, lyricsMul: lyrics?.mul ?? null, letterbox: bars,
     } }).finally(unCut);
     setResult({ file, total: plan.total, kills: plan.punches.length });
     return file;
@@ -520,27 +561,64 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
 
   return (
     <>
-      <Frame title={tr("Пресеты эдитов")} meta={tr("1 пресет")} className="span-2 ne"
+      <Frame title={tr("Пресеты эдитов")} meta={tr("{0} пресета", PRESETS.length)} className={`span-2 ne ${cine ? "is-cine" : ""}`}
         help={tr("Пресет сразу включает все, что нужно для эдита в определенном стиле: текст, эффекты, цвет, монтаж под бит. Моменты берутся из нескольких демок сразу.")}>
-        <div className="ne-hero">
-          <div className="ne-preview">
-            <NightPreview />
-            <span className="ne-badge mono">PRESET 01</span>
-          </div>
-          <div className="ne-about">
-            <h3 className="ne-title">Night Edit</h3>
-            <p className="dim">{tr("Как ночные эдиты из TikTok. Интро ночью: звездное небо с луной, сиреневый текст песни с сердцем, светящаяся пыль, рамка на цели и светящееся оружие. Дальше быстрый дневной монтаж лучших киллов, каждый ровно на удар трека.")}</p>
-            <ul className="ne-feats">
-              {[
-                ["✦", tr("текст Night: буквы выпрыгивают, сердце вокруг слова")],
-                ["☾", tr("звездное небо и ночной цвет в интро")],
-                ["◇", tr("рамка со световым лучом на цели перед киллом")],
-                ["⚡", tr("светящееся оружие в руках")],
-                ["♫", tr("киллы ровно на удары, рывки на склейках")],
-              ].map(([i, t]) => <li key={t}><i>{i}</i>{t}</li>)}
-            </ul>
-          </div>
+        <div className="ne-presets" role="radiogroup" aria-label={tr("Пресет")}>
+          {PRESETS.map((p) => (
+            <button key={p.id} type="button" role="radio" aria-checked={kind === p.id} disabled={!!busy || rendering}
+              className={`ne-preset ne-preset--${p.id} ${kind === p.id ? "is-on" : ""}`} onClick={() => setKind(p.id)}>
+              <span className="mono">{p.badge}</span>
+              <b>{p.name}</b>
+            </button>
+          ))}
         </div>
+        {cine ? (
+          <div className="ne-hero">
+            <div className="ne-preview cn-frame">
+              <CinePreview />
+              <span className="ne-badge cn-badge mono">PRESET 02</span>
+            </div>
+            <div className="ne-about">
+              <h3 className="ne-title cn-title">Cinematic</h3>
+              <p className="dim">{tr("Как ролики «CS2 с RTX»: игра записывается через ReShade с эффектами по глубине кадра. Мягкие тени по углам, отраженный от стен цветной свет, отражения на полу и стеклах, свечение, кино-цвет и кинорамка. Это экранные эффекты, а не настоящая трассировка лучей, но картинка заметно живее.")}</p>
+              <ul className="ne-feats cn-feats">
+                {[
+                  ["◐", tr("глобальное освещение и тени по углам (MXAO + IL)")],
+                  ["◇", tr("отражения на полу, стенах и стеклах (SSR)")],
+                  ["✺", tr("свечение ярких мест, кино-цвет, виньетка")],
+                  ["▭", tr("кинорамка 2.39:1")],
+                  ["♫", tr("киллы ровно на удары, рывки на склейках")],
+                ].map(([i, t]) => <li key={t}><i>{i}</i>{t}</li>)}
+              </ul>
+              {rs && (
+                <span className="mono dim cn-note">
+                  {rs.ready ? tr("ReShade готов") : tr("ReShade скачается при первой сборке (~10 МБ)")}
+                  {rs.msaa && <> · {tr("MSAA в CS2 на время записи выключится и потом вернется")}</>}
+                </span>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="ne-hero">
+            <div className="ne-preview">
+              <NightPreview />
+              <span className="ne-badge mono">PRESET 01</span>
+            </div>
+            <div className="ne-about">
+              <h3 className="ne-title">Night Edit</h3>
+              <p className="dim">{tr("Как ночные эдиты из TikTok. Интро ночью: звездное небо с луной, сиреневый текст песни с сердцем, светящаяся пыль, рамка на цели и светящееся оружие. Дальше быстрый дневной монтаж лучших киллов, каждый ровно на удар трека.")}</p>
+              <ul className="ne-feats">
+                {[
+                  ["✦", tr("текст Night: буквы выпрыгивают, сердце вокруг слова")],
+                  ["☾", tr("звездное небо и ночной цвет в интро")],
+                  ["◇", tr("рамка со световым лучом на цели перед киллом")],
+                  ["⚡", tr("светящееся оружие в руках")],
+                  ["♫", tr("киллы ровно на удары, рывки на склейках")],
+                ].map(([i, t]) => <li key={t}><i>{i}</i>{t}</li>)}
+              </ul>
+            </div>
+          </div>
+        )}
       </Frame>
 
       <Frame title={tr("1 · Демки")} meta={tr("выбрано {0}", chosen.size)} className="ne-step">
@@ -562,7 +640,7 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
           <div className="ne-track">
             <b>{music.path.split(/[\\/]/).pop()}</b>
             <span className="mono dim">{lyricsReady
-              ? (textStyle === "accent" ? tr("с текстом · по слову на удар, киллы с припева") : tr("с текстом · стиль Night в интро"))
+              ? (textMode === "accent" ? tr("с текстом · по слову на удар, киллы с припева") : textMode === "none" ? tr("текст выключен, киллы с припева") : tr("с текстом · стиль Night в интро"))
               : tr("без текста: в интро будет только музыка")}</span>
             {music.duration > 0 && (
               <>
@@ -578,13 +656,16 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
             )}
           </div>
         ) : (
-          <p className="empty dim">{tr("Эдит собирается под трек: выбери песню (и текст) во вкладке «Звук».")}</p>
+          <p className="empty dim">{tr("Эдит собирается под трек: выбери песню (и текст) ниже, в «Настройках эдита» на вкладке «Звук».")}</p>
         )}
-        <button type="button" className="chip" onClick={onGoSound}>{tr("открыть «Звук»")}</button>
+        <button type="button" className="chip" onClick={onGoSound}>{tr("выбрать трек")}</button>
         <button type="button" className="go go--ghost ne-find" disabled={!chosen.size || !!busy || rendering} onClick={findMoments}>
           {tr("Найти лучшие моменты")}
         </button>
       </Frame>
+
+      {/* видео и звук (трек, текст, громкость) — те же настройки, что у клипов, прямо здесь */}
+      {settings}
 
       {scan && (
         <Frame title={tr("3 · Моменты")} meta={tr("выбрано {0} из {1}", picked.size, scan.groups.length)} className="span-2 ne-step"
@@ -648,6 +729,26 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
       {(scan || last) && (
         <Frame title={tr("4 · Сборка")} meta={sel.length ? tr("~{0} с · {1} демк.", estSec, demoCount) : ""} className="span-2 ne-step ne-build">
           {scan && <>
+          {cine ? (
+          <div className="ne-opts">
+            <div className="ne-opt">
+              <span className="mono dim">{tr("текст")}</span>
+              <div className="ratios">
+                {[["accent", tr("по слову на удар (как в TikTok)")], ["none", tr("без текста")]].map(([k, l]) => (
+                  <button key={k} type="button" className={cineText === k ? "is-on" : ""} onClick={() => setCineText(k)}>{l}</button>
+                ))}
+              </div>
+            </div>
+            <div className="ne-opt">
+              <span className="mono dim">{tr("кинорамка 2.39:1")}</span>
+              <div className="ratios">
+                {[[true, tr("с полосами")], [false, tr("без полос")]].map(([k, l]) => (
+                  <button key={String(k)} type="button" className={letterbox === k ? "is-on" : ""} onClick={() => setLetterbox(k)}>{l}</button>
+                ))}
+              </div>
+            </div>
+          </div>
+          ) : (
           <div className="ne-opts">
             <div className="ne-opt">
               <span className="mono dim">{tr("текст")}</span>
@@ -666,6 +767,7 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
               </div>
             </div>
           </div>
+          )}
           <div className="ne-build__row">
             <div className="ne-build__sum">
               <b>{tr("{0} моментов", sel.length)}</b>
@@ -678,11 +780,11 @@ export function NightEdit({ Frame, Hint, archive, cs2, hlae, out, music, setMusi
           {last && (
             <div className="ne-recut">
               <span className="dim">
-                {last.textStyle === "accent"
+                {last.textStyle !== "night"
                   ? tr("Прошлый эдит ({0}, {1} моментов) можно склеить заново под выбранный трек, без игры.", last.maps, last.parts.length)
                   : tr("Прошлый эдит записан с текстом Night: слова старого трека уже в интро, под другой трек его нужно записать заново.")}
               </span>
-              <button type="button" className="chip" disabled={last.textStyle !== "accent" || !musicReady || rendering || !!busy || !hlae || !out}
+              <button type="button" className="chip" disabled={last.textStyle === "night" || !musicReady || rendering || !!busy || !hlae || !out}
                 onClick={() => build(last)}>{tr("Пересобрать с другим треком")}</button>
             </div>
           )}

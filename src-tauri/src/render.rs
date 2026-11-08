@@ -57,6 +57,10 @@ pub struct Clip {
     // демка клипа, если в задании их несколько (эдит): игра переходит к следующей сама, без перезапуска
     #[serde(default)]
     pub demo: Option<String>,
+    // кусок момента, из которого вырезан долгий поиск между киллами (src/features/demo/gaps.js):
+    // куски одной группы после записи склеиваются обратно в один клип
+    #[serde(default)]
+    pub group: Option<u32>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -107,6 +111,9 @@ pub struct Job {
     vm_z: f32,
     voice_indices: i64,
     voice_indices_high: i64,
+    // голосовой чат и на повторе от лица убитого; по умолчанию на повторе он выключен
+    #[serde(default)]
+    replay_voice: bool,
     // h264_nvenc / h264_amf / h264_qsv, если включено кодирование на GPU (см. detect_gpu_encoder)
     #[serde(default)]
     gpu_encoder: Option<String>,
@@ -157,6 +164,9 @@ pub struct Job {
     // монтаж из нескольких демок: клипы — отдельными файлами part_NN.mp4 в эту папку, без ролика и уведомления
     #[serde(default)]
     parts_dir: Option<String>,
+    // пресет Cinematic RTX: запись через ReShade с аддоном HLAE (reshade.rs)
+    #[serde(default)]
+    reshade: bool,
 }
 fn yes() -> bool { true }
 
@@ -217,6 +227,19 @@ fn concat_clips(ff: &Path, parts: &[PathBuf], dst: &Path, list: &Path) -> bool {
 }
 fn default_start_key() -> String { "f10".into() }
 
+// Подряд идущие готовые клипы одной группы кусков (Clip::group) — диапазоны индексов.
+// Клип без группы — диапазон из одного элемента.
+fn group_runs(info: &[(Option<u32>, u32, usize)]) -> Vec<std::ops::Range<usize>> {
+    let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+    for (i, (g, _, _)) in info.iter().enumerate() {
+        match runs.last_mut() {
+            Some(r) if g.is_some() && info[r.start].0 == *g => r.end = i + 1,
+            _ => runs.push(i..i + 1),
+        }
+    }
+    runs
+}
+
 // Цветокоррекция атмосферы при сборке клипа — работает всегда, даже если игра не приняла команды тумана
 fn atmo_grade(a: &str) -> Option<&'static str> {
     Some(match a {
@@ -249,7 +272,11 @@ fn atmo_cmds(a: &str) -> String {
 
 // Сырая запись последнего рендера (take-папки) хранится в <out>/.clipforge_last вместе с этим
 // описанием: пересобрать можно, только если клипы, разрешение и частота записи подходят.
-const LAST_DIR: &str = ".clipforge_last";
+pub(crate) const LAST_DIR: &str = ".clipforge_last";
+// Сырьё склеенного клипа уходит в кэш «Пересобрать без игры», только пока на диске свободно
+// больше этого — иначе удаляется сразу: сырая запись 360 к/с весит десятки ГБ, и её накопление
+// не должно забивать диск во время рендера (preflight.rs считает место именно так)
+const KEEP_RAW_FREE: u64 = 20 * 1024 * 1024 * 1024;
 #[derive(Serialize, Deserialize, PartialEq, Clone)]
 pub struct LastRender {
     pub clips: Vec<(u32, u32)>,
@@ -628,7 +655,9 @@ pub fn set_parser_dir(dir: PathBuf) {
 }
 
 fn node_command(script: &str) -> (Command, PathBuf) {
-    if let Some(dir) = PARSER_DIR.get() {
+    // В dev-сборке ресурсы — старая копия из прошлой сборки установщика (target/debug/parser):
+    // правки scripts/ туда не попадают, поэтому берём скрипты проекта и системный node
+    if let (false, Some(dir)) = (cfg!(debug_assertions), PARSER_DIR.get()) {
         let s = dir.join("scripts").join(script);
         if s.exists() {
             let node = dir.join("node.exe");
@@ -639,7 +668,7 @@ fn node_command(script: &str) -> (Command, PathBuf) {
     (Command::new("node"), Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("scripts").join(script))
 }
 
-fn run_node(script: &str, args: &[&str]) -> Result<String, String> {
+pub(crate) fn run_node(script: &str, args: &[&str]) -> Result<String, String> {
     let (mut cmd, script) = node_command(script);
     cmd.arg(script).args(args);
     no_window(&mut cmd);
@@ -763,6 +792,8 @@ fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, Str
     // HLAE пишет сырые take-папки (video.mp4 + audio.wav) во временную папку, в out попадают только готовые клипы
     c += &format!("mirv_streams record name \"{}\"\n", work.to_string_lossy().replace('\\', "/"));
     c += &format!("mirv_fov {}\n", j.fov);
+    // Cinematic RTX: эффекты ReShade (аддон HLAE включает их сам, если ReShade подгружен — для верности явно)
+    if j.reshade { c += "mirv_reshade enabled 1\n"; }
     c += &format!(
         "viewmodel_fov {}\nviewmodel_offset_x {}\nviewmodel_offset_y {}\nviewmodel_offset_z {}\n",
         j.vm_fov, j.vm_x, j.vm_y, j.vm_z
@@ -772,8 +803,9 @@ fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, Str
     c += "engine_no_focus_sleep 0\nsnd_mute_losefocus 0\n";
     c += &format!("bind {} \"exec clipforge_run\"\n", j.start_key);
 
-    c += &format!("tv_listen_voice_indices_h {}\n", j.voice_indices_high);
-    c += &format!("tv_listen_voice_indices {}\n", j.voice_indices);
+    // чей голосовой чат слышно; та же пара команд возвращает голоса после повтора от лица убитого
+    let voice = format!("tv_listen_voice_indices_h {}\ntv_listen_voice_indices {}\n", j.voice_indices_high, j.voice_indices);
+    c += &voice;
 
     let head = std::mem::take(&mut c);
     // Дальше — clipforge_run.cfg, он выполняется по F10 уже внутри загруженной демки.
@@ -813,6 +845,9 @@ fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, Str
         if cl.night { end += "mirv_sky material default\n"; }
         end += "cl_drawhud 1\n";
         let reps = replays(cl);
+        // повтор шёл без голосового чата — к следующему клипу голоса возвращаются
+        let mute_reps = !reps.is_empty() && !j.replay_voice;
+        if mute_reps { end += &voice; }
         let last_in_demo = group_end(i) == i + 1;
         if !reps.is_empty() && !last_in_demo {
             // после повтора возвращаем расписание оставшихся клипов
@@ -844,8 +879,10 @@ fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, Str
             // отмотка сбрасывает, за кем следит камера: spec_player до demo_gototick терялся и повтор
             // снова шёл с наших глаз. Переключаемся уже на тиках повтора — сразу и ещё раз для надёжности.
             files.push((format!("cf_{i}_vic{r}"), format!("spec_player {v}\n")));
+            // на повторе голосового чата нет: он бы заново проигрался после отмотки поверх чужих глаз
+            let mute = if mute_reps { "tv_listen_voice_indices 0\ntv_listen_voice_indices_h 0\n" } else { "" };
             files.push((format!("cf_{i}_rep{r}"), format!(
-                "mirv_cmd clear\nmirv_cmd addAtTick {} \"exec cf_{i}_vic{r}\"\nmirv_cmd addAtTick {} \"exec cf_{i}_vic{r}\"\nmirv_cmd addAtTick {to} \"exec {next}\"\nspec_player {v}\ndemo_gototick {from}\n",
+                "{mute}mirv_cmd clear\nmirv_cmd addAtTick {} \"exec cf_{i}_vic{r}\"\nmirv_cmd addAtTick {} \"exec cf_{i}_vic{r}\"\nmirv_cmd addAtTick {to} \"exec {next}\"\nspec_player {v}\ndemo_gototick {from}\n",
                 from + 1, from + 8
             )));
         }
@@ -1285,6 +1322,16 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
     // console.log игры (-condebug) — источник меток прогресса; старый удаляем, чтобы не читать чужие метки
     let console_log = cfg_dir.parent().map(|p| p.join("console.log")).unwrap_or_default();
     if !reuse { let _ = fs::remove_file(&console_log); }
+    // Последняя страховка от демок FACEIT с курицей (CS2 падает на playdemo): parse.cjs чинит демку
+    // при открытии, но её могли разобрать раньше, а копия со скинами пишется заново. Целая демка
+    // не меняется, проверка — около секунды на демку.
+    if !reuse {
+        let mut demos: Vec<&str> = vec![job.demo.as_str()];
+        for c in &job.clips { if let Some(d) = c.demo.as_deref() { if !demos.contains(&d) { demos.push(d); } } }
+        for d in demos {
+            if let Err(e) = run_node("fixdemo.cjs", &[d]) { log::warn!("fixdemo {d}: {e}"); }
+        }
+    }
 
     let hlae_dir = Path::new(&job.hlae).parent().ok_or("неверный путь к HLAE")?.to_path_buf();
     let cmdline = format!(
@@ -1296,19 +1343,24 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
     let mut dll = hlae_dir.join("x64").join("AfxHookSource2.dll");
     if !dll.exists() { dll = hlae_dir.join("AfxHookSource2.dll"); }
     if !dll.exists() { return Err(format!("не найден AfxHookSource2.dll рядом с HLAE: {}", hlae_dir.display())); }
+    // Cinematic RTX: ReShade подгружается вторым DLL после хука HLAE, только на этот запуск игры
+    let reshade_dll = if job.reshade && !reuse { Some(crate::reshade::prepare()?) } else { None };
 
     thread::spawn(move || {
         // при пересборке игра не нужна: take-папки уже лежат во временной папке
         let mut child = if reuse { None } else {
-            match Command::new(&job.hlae)
-                .args(["-customLoader", "-noGui", "-autoStart"])
-                .arg("-hookDllPath").arg(&dll)
-                .arg("-programPath").arg(&job.cs2)
-                .arg("-cmdLine").arg(&cmdline)
-                .spawn()
-            {
+            let mut cmd = Command::new(&job.hlae);
+            cmd.args(["-customLoader", "-noGui", "-autoStart"]).arg("-hookDllPath").arg(&dll);
+            if let Some(rs) = &reshade_dll {
+                cmd.arg("-hookDllPath").arg(rs).env("RESHADE_BASE_PATH_OVERRIDE", crate::reshade::own_dir());
+            }
+            match cmd.arg("-programPath").arg(&job.cs2).arg("-cmdLine").arg(&cmdline).spawn() {
                 Ok(c) => Some(c),
-                Err(_) => { let _ = app.emit("render-error", "не удалось запустить HLAE"); return; }
+                Err(_) => {
+                    crate::reshade::restore_video();
+                    let _ = app.emit("render-error", "не удалось запустить HLAE");
+                    return;
+                }
             }
         };
         let out = PathBuf::from(&job.out);
@@ -1323,6 +1375,8 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
         let mut sizes: HashMap<PathBuf, (u64, u32)> = HashMap::new();
         let mut made = 0;
         let mut done_clips: Vec<crate::toast::ToastClip> = Vec::new();
+        // к каждому готовому клипу: (группа кусков, раунд, киллов) — для склейки кусков одного момента
+        let mut done_info: Vec<(Option<u32>, u32, usize)> = Vec::new();
         let mut compare: Vec<CompareItem> = Vec::new();
         let _ = fs::remove_file(cache.join("compare.json"));
         // прогресс: 70% — запись (по меткам тиков из console.log), 30% — склейка (по ffmpeg)
@@ -1368,7 +1422,7 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
                 // игру запускал рендер — закрываем её вместе с ним (при пересборке игры нет)
                 if let Some(c) = child.as_mut() { let _ = c.kill(); }
                 ov_stop.store(true, Ordering::SeqCst);
-                if !reuse { kill_cs2(); }
+                if !reuse { kill_cs2(); crate::reshade::restore_video(); }
                 let _ = app.emit("render-error", "рендер остановлен");
                 return;
             }
@@ -1395,12 +1449,14 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
                 handled.insert(d.clone());
                 let clip = job.clips.get(i).cloned().unwrap_or_else(|| Clip {
                     account_id: 0, name: String::new(), round: 0, start: 0, end: 0, slot: 1,
-                    kill_ticks: vec![], hits: vec![], drops: vec![], music_start: None, cine: None, hs_ticks: vec![], music_fade_in: None, music_fade_out: None, night: false, clean: false, demo: None,
+                    kill_ticks: vec![], hits: vec![], drops: vec![], music_start: None, cine: None, hs_ticks: vec![], music_fade_in: None, music_fade_out: None, night: false, clean: false, demo: None, group: None,
                 });
                 // "2026-10-30 15-40-12 R05 3K.mp4" — сортируется по времени, как остальные видео в папке
                 let dst = match &job.parts_dir {
                     Some(pd) => { let _ = fs::create_dir_all(pd); PathBuf::from(pd).join(format!("part_{i:02}.mp4")) }
                     None => out.join(match (clip.round, clip.kill_ticks.len()) {
+                        // кусок момента: имена должны различаться (у двух кусков может быть по 1K)
+                        _ if clip.group.is_some() => format!("{prefix} R{:02} part {:02}.mp4", clip.round, i + 1),
                         (0, _) => format!("{prefix} clip {:02}.mp4", i + 1),
                         (r, 0) => format!("{prefix} R{r:02}.mp4"),
                         (r, k) => format!("{prefix} R{r:02} {k}K.mp4"),
@@ -1418,13 +1474,16 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
                         path: dst.to_string_lossy().to_string(),
                         name: dst.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
                     });
+                    done_info.push((clip.group, clip.round, clip.kill_ticks.len()));
                     // кусок монтажа с ночным видом: сырьё (с потоками глубины и маски оружия) остаётся рядом
                     // с кусками — следующая демка очищает кэш, а по нему видно, что записал HLAE
                     if let (Some(pd), true) = (&job.parts_dir, clip.night) {
                         let _ = fs::rename(d, PathBuf::from(pd).join(format!("take_night_{i:02}")));
                     }
-                    // сырьё — в кэш для «Пересобрать без игры» (место освобождается следующим рендером)
-                    let kept = d.exists() && d.file_name().is_some_and(|n| fs::rename(d, cache.join(n)).is_ok());
+                    // сырьё — в кэш для «Пересобрать без игры» (место освобождается следующим рендером),
+                    // если места хватает; иначе удаляем, и пересборка этого рендера попросит новую запись
+                    let room = crate::preflight::free_bytes(&out_dir).is_some_and(|f| f > KEEP_RAW_FREE);
+                    let kept = room && d.exists() && d.file_name().is_some_and(|n| fs::rename(d, cache.join(n)).is_ok());
                     if !kept { let _ = fs::remove_dir_all(d); }
                     if let (true, Some(n)) = (kept, d.file_name()) {
                         compare.push(CompareItem {
@@ -1450,12 +1509,26 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
         // Раньше игру не трогали из страха оборвать запись, но сюда доходим только когда файлы
         // уже дописаны (перестали расти) и обработаны.
         ov_stop.store(true, Ordering::SeqCst);
-        if !reuse { kill_cs2(); }
+        // игра закрыта — настройки видео, которые меняла запись Cinematic (MSAA), возвращаются
+        if !reuse { kill_cs2(); crate::reshade::restore_video(); }
         // Копия демки со скинами (игра закрыта — файл уже не занят)
         let _ = fs::remove_file(work.join("skins.dem"));
         // Удаляются только если опустели (remove_dir не трогает непустые папки)
         let _ = fs::remove_dir(&work);
         let _ = fs::remove_dir(out.join(".clipforge_tmp"));
+        // Игра закрылась (упала) до конца записи: в console.log нет конца последнего клипа.
+        // Тогда последний записанный клип оборван, а следующие не записаны вовсе — молча склеивать
+        // это в «готово» нельзя (так было: reel из 2 клипов вместо 8 без единого слова).
+        let crashed = !reuse && !recording_finished(&log_tail(&console_log).unwrap_or_default(), total);
+        let crash_msg = crashed.then(|| {
+            let at = handled.len().clamp(1, total);
+            format!("CS2 закрылась посреди записи на клипе {at} из {total}: он оборван, {} не записаны. Запусти рендер для оставшихся клипов ещё раз", total - at)
+        });
+        // эдит без части кусков собирать бессмысленно
+        if let (Some(msg), true) = (&crash_msg, job.parts_dir.is_some()) {
+            let _ = app.emit("render-error", msg.clone());
+            return;
+        }
         if made == 0 {
             let _ = app.emit("render-error", if handled.is_empty() {
                 format!("запись не началась: в игре нужно нажать {}, когда демка загрузится", job.start_key.to_uppercase())
@@ -1471,6 +1544,33 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
             let _ = app.emit("render-progress", 100.0_f32);
             let _ = app.emit("render-done", out.to_string_lossy().to_string());
             return;
+        }
+        // куски одного момента (вырезан поиск между киллами) — обратно в один клип раунда, без перехода
+        let runs = group_runs(&done_info);
+        if runs.iter().any(|r| r.len() >= 2) {
+            let mut merged = Vec::new();
+            for r in runs {
+                let parts: Vec<PathBuf> = done_clips[r.clone()].iter().map(|c| PathBuf::from(&c.path)).collect();
+                if parts.len() < 2 { merged.extend(done_clips[r].iter().cloned()); continue; }
+                let (_, round, _) = done_info[r.start];
+                let kills: usize = done_info[r.clone()].iter().map(|x| x.2).sum();
+                let dst = out.join(if kills > 0 { format!("{prefix} R{round:02} {kills}K.mp4") } else { format!("{prefix} R{round:02}.mp4") });
+                if concat_clips(&ff, &parts, &dst, &cache.join("group.ffconcat")) {
+                    for p in &parts { let _ = fs::remove_file(p); }
+                    // «До / после» сравнивает запись с одним клипом — кусков больше нет
+                    let gone: Vec<String> = parts.iter().map(|p| p.to_string_lossy().to_string()).collect();
+                    compare.retain(|c| !gone.contains(&c.out));
+                    merged.push(crate::toast::ToastClip {
+                        path: dst.to_string_lossy().to_string(),
+                        name: dst.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+                    });
+                } else {
+                    // не склеилось — куски остаются отдельными файлами, запись не теряется
+                    merged.extend(done_clips[r].iter().cloned());
+                }
+            }
+            done_clips = merged;
+            let _ = fs::write(cache.join("compare.json"), serde_json::to_string(&compare).unwrap_or_default());
         }
         if job.merge && done_clips.len() >= 2 {
             let parts: Vec<PathBuf> = done_clips.iter().map(|c| PathBuf::from(&c.path)).collect();
@@ -1501,9 +1601,61 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
         }
         let _ = app.emit("render-progress", 100.0_f32);
         let _ = app.emit("render-done", out.to_string_lossy().to_string());
+        // после render-done: он сам ошибку не сбрасывает, и предупреждение остаётся видно
+        if let Some(msg) = &crash_msg { let _ = app.emit("render-warning", msg.clone()); }
         // уведомление в углу экрана: ты мог свернуть игру и уйти — клипы готовы
         crate::toast::show(&app, crate::toast::ToastData { clips: done_clips, hlae: job.hlae.clone(), out: job.out.clone(), note: None });
     });
     Ok(())
 }
 
+
+#[cfg(test)]
+mod replay_voice_tests {
+    use super::*;
+
+    fn job(replay_voice: bool) -> Job {
+        let clip = |s: u32, e: u32| serde_json::json!({ "accountId": 1, "name": "a", "round": 3, "start": s, "end": e, "slot": 2,
+            "cine": { "kill": e - 64, "victims": [{ "kill": e - 64, "slot": 7 }] } });
+        serde_json::from_value(serde_json::json!({
+            "demo": "x.dem", "hlae": "h", "cs2": "c", "out": "o", "fps": 60, "blur": false, "fov": 90,
+            "width": 1280, "height": 960, "crf": 18, "vmFov": 68.0, "vmX": 2.5, "vmY": 0.0, "vmZ": -1.5,
+            "voiceIndices": 1023, "voiceIndicesHigh": 0, "replayVoice": replay_voice,
+            "clips": [clip(1000, 2000), clip(3000, 4000)],
+        })).unwrap()
+    }
+
+    fn file<'a>(files: &'a [(String, String)], name: &str) -> &'a str {
+        &files.iter().find(|(n, _)| n == name).unwrap().1
+    }
+
+    #[test]
+    fn replay_mutes_voice_and_clip_end_restores_it() {
+        let (head, _, files) = build_cfg(&job(false), 60, Path::new("w"), Path::new("cfg"));
+        assert!(head.contains("tv_listen_voice_indices 1023\n"));
+        assert!(file(&files, "cf_0_rep0").starts_with("tv_listen_voice_indices 0\ntv_listen_voice_indices_h 0\n"));
+        let end = file(&files, "cf_0_e");
+        assert!(end.contains("tv_listen_voice_indices_h 0\ntv_listen_voice_indices 1023\n"));
+        // голос возвращается раньше, чем начнётся следующий клип
+        assert!(end.find("tv_listen_voice_indices 1023").unwrap() < end.find("demo_gototick").unwrap());
+    }
+
+    #[test]
+    fn replay_voice_on_keeps_voice() {
+        let (_, _, files) = build_cfg(&job(true), 60, Path::new("w"), Path::new("cfg"));
+        assert!(!file(&files, "cf_0_rep0").contains("tv_listen_voice"));
+        assert!(!file(&files, "cf_0_e").contains("tv_listen_voice"));
+    }
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+
+    #[test]
+    fn runs_join_only_consecutive_parts_of_one_group() {
+        let info = [(None, 1, 1), (Some(1), 5, 1), (Some(1), 5, 2), (None, 6, 2), (Some(4), 9, 1), (Some(4), 9, 1), (Some(4), 9, 1)];
+        assert_eq!(group_runs(&info), vec![0..1, 1..3, 3..4, 4..7]);
+        assert_eq!(group_runs(&[]), Vec::<std::ops::Range<usize>>::new());
+    }
+}

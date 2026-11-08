@@ -66,6 +66,9 @@ pub struct Montage {
     pub lyrics: Option<String>,
     #[serde(default)]
     pub lyrics_mul: Option<String>,
+    // кинорамка 2.39:1 (пресет Cinematic RTX): чёрные полосы сверху и снизу, только у широкого кадра
+    #[serde(default)]
+    pub letterbox: bool,
 }
 
 fn has_audio(ff: &Path, p: &str) -> bool {
@@ -133,6 +136,12 @@ fn graph(m: &Montage, inputs: &[String], game_audio: bool, rubberband: bool) -> 
     if let Some(_) = &m.lyrics {
         g += &format!(";{v}[{li}:v]overlay=0:0:format=auto[vly]");
         v = "[vly]".into();
+    }
+    // полосы поверх текста: в кино текст тоже не заходит за рамку
+    let bar = ((m.height as f64 - m.width as f64 / 2.39) / 2.0).round();
+    if m.letterbox && m.width as f64 / m.height as f64 >= 1.5 && bar >= 2.0 {
+        g += &format!(";{v}drawbox=x=0:y=0:w=iw:h={bar}:color=black:t=fill,drawbox=x=0:y=ih-{bar}:w=iw:h={bar}:color=black:t=fill[vlb]");
+        v = "[vlb]".into();
     }
     g += &format!(";{v}fade=t=out:st={:.3}:d=1.0,format=yuv420p[vout]", (total - 1.0).max(0.0));
     // звук: трек + игра потише, конец уходит в тишину вместе с картинкой

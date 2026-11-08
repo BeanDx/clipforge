@@ -32,6 +32,9 @@ pub struct Plan {
     rec_fps: u32,
     // секунд записи всех клипов (с повторами); 0 — без записи (пересборка прошлого рендера)
     seconds: f64,
+    // секунд записи самого длинного клипа: сырьё одновременно лежит только у пары клипов
+    #[serde(default)]
+    max_clip_seconds: f64,
     gpu: bool,
     // демка переписывается со скинами — рядом ляжет её копия
     skins: bool,
@@ -44,7 +47,7 @@ fn gb(b: f64) -> String {
 }
 
 // Свободное место на диске папки (или ближайшей существующей родительской)
-fn free_bytes(dir: &Path) -> Option<u64> {
+pub(crate) fn free_bytes(dir: &Path) -> Option<u64> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
     let existing = dir.ancestors().find(|p| p.exists())?;
@@ -55,12 +58,27 @@ fn free_bytes(dir: &Path) -> Option<u64> {
     (ok != 0).then_some(free)
 }
 
-// Сырая запись HLAE: на GPU q=18 ≈ 0.5 бита на пиксель, на CPU (x264 crf 22 slow) ≈ 0.12.
-// Сверху запас 30% на готовые клипы и сборку.
+// Сырая запись HLAE: на GPU q=18 ≈ 1.6 бита на пиксель (замер: 1280×960, 360 к/с, 91 с → 8.3 ГБ),
+// на CPU (x264 crf 22 slow) ≈ 0.12.
+fn raw_bytes(p: &Plan, seconds: f64) -> f64 {
+    let bpp = if p.gpu { 1.6 } else { 0.12 };
+    p.width as f64 * p.height as f64 * p.rec_fps as f64 * seconds * bpp / 8.0
+}
+
+// Сколько места нужно в пике. Сырьё каждого клипа удаляется (или уходит в кэш, пока есть место —
+// см. KEEP_RAW_FREE в render.rs) сразу после склейки, поэтому одновременно лежат клип, который
+// пишется, и предыдущий, который склеивается, — а не вся запись разом. Готовые клипы (обычная
+// частота кадров, сжатие crf) весят около 1% сырья — кладём 2%.
 fn estimate_bytes(p: &Plan) -> f64 {
-    let bpp = if p.gpu { 0.5 } else { 0.12 };
-    let raw = p.width as f64 * p.height as f64 * p.rec_fps as f64 * p.seconds * bpp / 8.0;
-    raw * 1.3
+    let clip = if p.max_clip_seconds > 0.0 { p.max_clip_seconds } else { p.seconds };
+    raw_bytes(p, (clip * 2.0).min(p.seconds)) + raw_bytes(p, p.seconds) * 0.02
+}
+
+fn dir_bytes(dir: &Path) -> u64 {
+    std::fs::read_dir(dir).map(|it| it.flatten().map(|e| match e.file_type() {
+        Ok(t) if t.is_dir() => dir_bytes(&e.path()),
+        _ => e.metadata().map(|m| m.len()).unwrap_or(0),
+    }).sum()).unwrap_or(0)
 }
 
 fn writable(dir: &Path) -> bool {
@@ -152,7 +170,9 @@ fn run(p: &Plan) -> Vec<Issue> {
     let out = PathBuf::from(&p.out);
     if p.out.trim().is_empty() || !writable(&out) {
         v.push(issue("error", "Нет доступа на запись в папку хайлайтов: {0}. Выбери другую в «Настройках»", vec![p.out.clone()]));
-    } else if let Some(free) = free_bytes(&out).map(|f| f as f64) {
+    } else if let Some(mut free) = free_bytes(&out).map(|f| f as f64) {
+        // сырьё прошлого рендера (для «Пересобрать без игры») новая запись удаляет в самом начале
+        if recording { free += dir_bytes(&out.join(crate::render::LAST_DIR)) as f64; }
         let mut need = estimate_bytes(p);
         if p.skins {
             need += std::fs::metadata(&p.demo).map(|m| m.len() as f64).unwrap_or(0.0);

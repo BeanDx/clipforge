@@ -955,8 +955,26 @@
 .err { animation: shake .4s var(--ease); }
 @keyframes shake { 20%, 60% { transform: translateX(-4px); } 40%, 80% { transform: translateX(4px); } }
 
+/* === вкладка «Демо»: режим «Клипы / Эдит» === */
+.demo-mode { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.demo-mode__btn {
+  display: grid; gap: 3px; padding: 12px 16px; text-align: left; cursor: pointer;
+  border: 1px solid var(--line-hi); background: var(--panel); color: var(--dim);
+  transition: border-color var(--t), background-color var(--t), color var(--t), transform var(--t) var(--ease);
+}
+.demo-mode__btn b { font-size: 1.1rem; letter-spacing: .02em; }
+.demo-mode__btn span { font-size: .7rem; }
+.demo-mode__btn:hover:not(:disabled) { transform: translateY(-1px); border-color: var(--teal); color: #fff; }
+.demo-mode__btn.is-on {
+  color: var(--yellow); border-color: var(--yellow); background: rgba(245,197,24,.06);
+  box-shadow: inset 0 -2px 0 var(--yellow);
+}
+.demo-mode__btn:disabled { opacity: .45; cursor: default; }
+@media (max-width: 560px) { .demo-mode { grid-template-columns: 1fr; } }
+
 /* === «Настройки клипа»: вкладки со сводкой === */
 .studio__tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.studio--edit .studio__tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .studio__tabs button {
   position: relative; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto;
   column-gap: 10px; align-items: center; padding: 10px 12px; text-align: left;
@@ -1273,6 +1291,50 @@
   color: #f3d6ff; background: rgba(196,92,255,.14); border: 1px solid rgba(196,92,255,.4);
 }
 
+/* выбор пресета: Night Edit / Cinematic RTX */
+.ne-presets { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.ne-preset {
+  display: grid; gap: 2px; text-align: left; padding: 8px 14px; min-width: 170px; cursor: pointer;
+  background: rgba(255,255,255,.02); border: 1px solid var(--line-hi); color: var(--dim);
+  transition: border-color .15s, background .15s, color .15s;
+}
+.ne-preset span { font-size: .62rem; letter-spacing: .12em; }
+.ne-preset b { font-size: 1rem; color: inherit; }
+.ne-preset:hover:not(:disabled) { color: #fff; border-color: #4a5b70; }
+.ne-preset--night.is-on { color: #f3d6ff; border-color: #c45cff; background: rgba(196,92,255,.12); }
+.ne-preset--cine.is-on { color: #ffe9c7; border-color: #f0a73a; background: rgba(240,167,58,.1); }
+.ne-preset:disabled { opacity: .55; cursor: default; }
+
+/* пресет Cinematic RTX: тёплое «киношное» оформление */
+.ne.is-cine { --ne: #f0a73a; --ne-2: #ff7a2f; }
+.cn-frame { border-color: #5a4320; box-shadow: 0 0 0 1px rgba(240,167,58,.12), 0 18px 50px rgba(160,90,20,.3); background: #000; }
+.cn-preview { position: relative; aspect-ratio: 16 / 9; overflow: hidden; }
+.cn-preview__img {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+  filter: contrast(1.18) saturate(1.12) brightness(1.04) sepia(.16);
+  animation: cn-drift 14s ease-in-out infinite alternate;
+}
+.cn-preview__glow {
+  position: absolute; inset: -20%; pointer-events: none; mix-blend-mode: screen;
+  background: radial-gradient(ellipse 40% 55% at 30% 30%, rgba(255,214,150,.42), transparent 70%),
+              radial-gradient(ellipse 70% 60% at 50% 50%, transparent 55%, rgba(0,0,0,.55) 100%);
+  animation: cn-sweep 7s ease-in-out infinite alternate;
+}
+.cn-preview__bar { position: absolute; left: 0; right: 0; height: 12.3%; background: #000; z-index: 1; }
+.cn-preview__bar--top { top: 0; }
+.cn-preview__bar--bot { bottom: 0; }
+.cn-badge { color: #ffe9c7; background: rgba(60,36,8,.65); border-color: rgba(240,167,58,.55); z-index: 2; }
+.cn-title {
+  background: linear-gradient(180deg, #fff4e0, #f0b25a); -webkit-background-clip: text; background-clip: text;
+  filter: drop-shadow(0 0 14px rgba(240,140,40,.5));
+}
+.cn-feats i { color: #ffe9c7; background: rgba(240,167,58,.12); border-color: rgba(240,167,58,.45); }
+.cn-note { font-size: .75rem; }
+.ne.is-cine ~ .ne-step .frame__head h2 { color: #ffd59a; }
+@keyframes cn-drift { from { transform: scale(1.04) translateX(-1.5%); } to { transform: scale(1.1) translateX(1.5%); } }
+@keyframes cn-sweep { from { transform: translateX(-6%); opacity: .8; } to { transform: translateX(10%); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .cn-preview__img, .cn-preview__glow { animation: none; } }
+
 .ne-step .frame__head h2 { color: #e9b8ff; }
 .ne-step.frame::before, .ne-step.frame::after, .ne.frame::before, .ne.frame::after { border-color: var(--ne); }
 .ne-demos { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; max-height: 260px; overflow: auto; }
@@ -1533,6 +1595,25 @@
 .hm-link { padding: 0; border: 0 !important; background: none !important; color: var(--teal); font: inherit; text-decoration: underline; cursor: pointer; }
 .hm-hist__meta { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
 .hm-err { color: #ff6b6b; }
+/* «Настройки», низ: общий счётчик рендеров — одометр */
+.rcount { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0 4px; text-align: center; }
+.rcount__label { color: var(--dim); font-size: .95rem; letter-spacing: .12em; text-transform: uppercase; }
+.odo {
+  display: inline-flex; font-family: var(--mono); font-weight: 700; line-height: 1;
+  font-size: clamp(2.4rem, 6vw, 3.6rem); color: var(--teal);
+  font-variant-numeric: tabular-nums;
+}
+/* у слота нет ни тени, ни маски: тень обрезалась окном цифры и рисовала мутный прямоугольник */
+.odo__slot { display: inline-block; height: 1em; overflow: hidden; width: .6em; }
+.odo__slot.is-group { margin-right: .2em; }
+.odo__strip { display: flex; flex-direction: column; transition: transform 1.6s cubic-bezier(.16, 1, .3, 1); will-change: transform; }
+.odo__strip > span { height: 1em; display: block; }
+@media (prefers-reduced-motion: reduce) { .odo__strip { transition: none; } }
+
+/* демка была сломана курицей FACEIT и исправлена */
+.hm-fixed, .demo-fixed { color: #f5c451; }
+.demo-fixed { margin: 8px 0 0; font-size: .85rem; }
+.arc-msg .demo-fixed { margin: 0; }
 
 .hm-rows { display: flex; flex-direction: column; }
 .hm-row { display: grid; grid-template-columns: 150px 120px 1fr 120px 150px auto; align-items: center; gap: 12px; padding: 10px 6px; border-bottom: 1px solid var(--line); transition: background-color .15s; }

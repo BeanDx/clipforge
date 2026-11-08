@@ -7,6 +7,7 @@ import { videoDir, join } from "@tauri-apps/api/path";
 import { open as openDialog, save as saveDialog, ask } from "@tauri-apps/plugin-dialog";
 import { parseDemo } from "../features/demo/demo";
 import { tierOf, tagLabel } from "../features/demo/moments";
+import { splitGaps, GAP_DEFAULTS } from "../features/demo/gaps";
 import { fontsReady, renderHudFrames } from "../features/demo/hud";
 import { SkinsPanel, planForRust, planIsEmpty } from "../features/skins/skins";
 import { MusicPanel, MUSIC_DEFAULT, renderLyricFrames, chorusDrops, alignChorusToKill, chainMusic } from "../features/music/music";
@@ -18,6 +19,8 @@ import { recordDemo, noteRender, loadHistory, evaluate, topBadges, isOwn } from 
 import { CompareModal } from "../features/gallery/CompareModal";
 import { Gallery } from "../features/gallery/Gallery";
 import { LiveStatus } from "./LiveStatus";
+import { RenderCounter } from "./RenderCounter";
+import { hitGlobalRenders } from "../features/profile/counter";
 import { NightEdit } from "../features/edit/NightEdit";
 import { Home } from "../features/home/Home";
 import { Profile } from "../features/profile/Profile";
@@ -29,13 +32,13 @@ import "./highlight-renderer.css";
 import { version as APP_VERSION } from "../../package.json";
 
 import { tr, trError, getLang, setLang, useLang } from "../i18n";
-const TABS = ["Главная", "Демо", "Архив", "Хайлайты", "Эдит", "Профиль", "Очередь", "Библиотека", "Настройки"];
+// «Эдит» — режим вкладки «Демо» (переключатель «Клипы / Эдит»): трек и видео у них общие
+const TABS = ["Главная", "Демо", "Архив", "Хайлайты", "Профиль", "Очередь", "Библиотека", "Настройки"];
 const PROFILE_TAB = TABS.indexOf("Профиль");
 const HOME_TAB = TABS.indexOf("Главная");
 const DEMO_TAB = TABS.indexOf("Демо");
 const ARCHIVE_TAB = TABS.indexOf("Архив");
 const HIGHLIGHTS_TAB = TABS.indexOf("Хайлайты");
-const EDIT_TAB = TABS.indexOf("Эдит");
 const SETTINGS_TAB = TABS.indexOf("Настройки");
 
 // Вкладки блока «Настройки клипа»
@@ -321,8 +324,12 @@ function NumField({ label, value, onChange }) {
 export default function HighlightRenderer() {
   const lang = useLang();
   const [tab, setTab] = useState(0);
-  // демки, которые «Главная» передаёт во вкладку «Эдит» (кнопка «в эдит»)
+  // демки, которые «Главная» передаёт в эдит (кнопка «в эдит»)
   const [editPreset, setEditPreset] = useState(null);
+  // вкладка «Демо»: клипы из одной демки или эдит из нескольких
+  const [demoMode, setDemoMode] = useState(() => { try { return localStorage.getItem("cf-demo-mode") === "edit" ? "edit" : "clips"; } catch { return "clips"; } });
+  useEffect(() => { try { localStorage.setItem("cf-demo-mode", demoMode); } catch { /* приватный режим */ } }, [demoMode]);
+  const openEdit = () => { setDemoMode("edit"); setTab(DEMO_TAB); };
   const [openClip, setOpenClip] = useState(null); // клип, который надо открыть в «Хайлайтах»
 
   // Рамка активной вкладки — один элемент, который переезжает под нужную кнопку.
@@ -486,6 +493,9 @@ export default function HighlightRenderer() {
     setAspect(next.aspect); setResId(next.resId); setStretch(next.stretch);
   };
   const [trim, setTrim] = useState(true);
+  // вырезать беготню между киллами одного момента (src/features/demo/gaps.js)
+  const [cutGaps, setCutGaps] = useState(() => { try { return localStorage.getItem("cf-cut-gaps") !== "0"; } catch { return true; } });
+  useEffect(() => { try { localStorage.setItem("cf-cut-gaps", cutGaps ? "1" : "0"); } catch { /* без localStorage — только на сессию */ } }, [cutGaps]);
   const [pad, setPad] = useState({ before: 1.5, after: 2 });
   const [vm, setVm] = useState({ fov: 68, x: 2.5, y: 0, z: -1.5, bob: false });
   const [hurts, setHurts] = useState([]);
@@ -506,7 +516,7 @@ export default function HighlightRenderer() {
     if (!skinKey) return;
     try { planIsEmpty(skinPlan) ? localStorage.removeItem(skinKey) : localStorage.setItem(skinKey, JSON.stringify(skinPlan)); } catch {}
   }, [skinKey, skinPlan]);
-  const [fx, setFx] = useState({ slowmo: false, damage: false, xray: false, hideDemoUi: true, hud: "full", camVictim: true, camOrbit: false, killFlash: false, flashColor: "pink", atmo: "", atmoGame: true, hsZoom: false });
+  const [fx, setFx] = useState({ slowmo: false, damage: false, xray: false, hideDemoUi: true, hud: "full", camVictim: true, replayVoice: false, camOrbit: false, killFlash: false, flashColor: "pink", atmo: "", atmoGame: true, hsZoom: false, rtx: false });
 
   // ffmpeg: рядом с HLAE его может не быть (установщик HLAE ставит его отдельно, в zip-версии его нет) —
   // тогда программа сама скачивает свою копию (src-tauri/src/ffmpeg.rs). ffReady — путь, когда готов.
@@ -574,15 +584,27 @@ export default function HighlightRenderer() {
       ? tr("{0}: файл демки поврежден или недокачан ({1}). Скачай его заново.", file, msg)
       : `${file}: ${msg}`;
   };
+  // Демка была сломана и parse.cjs её исправил (scripts/fixdemo.cjs): чем именно — понятным текстом
+  const [fixNote, setFixNote] = useState(null);
+  const fixText = (f, file) => {
+    if (!f) return null;
+    const pre = file ? `${file}: ` : "";
+    if (f.error) return pre + tr("демка сломана (курица FACEIT), но исправить не вышло: {0}. Закрой CS2 и открой демку снова.", f.error);
+    const parts = [];
+    if (f.crash?.length) parts.push(f.crash.includes("CChicken") ? tr("курица-питомец в первом тике — CS2 падала на playdemo") : tr("baseline {0} в первом тике — CS2 падала на playdemo", f.crash.join(", ")));
+    if (f.text) parts.push(tr("битый текст в событиях: {0}", f.text));
+    return pre + tr("🐔 Демка была сломана и исправлена: {0}. Геймплей не изменился.", parts.join("; "));
+  };
   // номер последней загрузки: если пока разбиралась одна демка, открыли другую, ответ первой не нужен
   const loadReq = useRef(0);
   const loadPath = useCallback(async (path) => {
     if (!path?.toLowerCase().endsWith(".dem")) return;
     const req = ++loadReq.current;
-    setError(""); setParsing(true);
+    setError(""); setParsing(true); setFixNote(null);
     try {
       const raw = JSON.parse(await invoke("parse_demo", { path }));
       if (req !== loadReq.current) return;
+      setFixNote(fixText(raw.fixed));
       const r = parseDemo(raw, 64, pad.before, pad.after);
       setDemo({ path, name: path.split(/[\\/]/).pop(), size: raw.size });
       setClips(r.clips); setPlayers(r.players); setMaxRound(r.maxRound); setRoster(r.roster); setHurts(r.hurts);
@@ -614,7 +636,7 @@ export default function HighlightRenderer() {
     const list = [...new Set((paths || []).filter((x) => x?.toLowerCase().endsWith(".dem")))];
     if (list.length <= 1) return loadPath(list[0]);
     setImportMsg(null);
-    const bad = [];
+    const bad = [], fixed = [];
     let added = 0;
     for (let i = 0; i < list.length; i++) {
       const path = list[i];
@@ -622,6 +644,7 @@ export default function HighlightRenderer() {
       setImporting({ i: i + 1, n: list.length, file });
       try {
         const raw = JSON.parse(await invoke("parse_demo", { path }));
+        if (raw.fixed) fixed.push(fixText(raw.fixed, file));
         const r = parseDemo(raw, 64, pad.before, pad.after);
         recordDemo({ path, size: raw.size }, r.clips).catch(() => {});
         const map = await invoke("demo_header", { path }).catch(() => "");
@@ -638,11 +661,11 @@ export default function HighlightRenderer() {
       } catch (e) { bad.push(demoError(path, e)); }
     }
     setImporting(null);
-    setImportMsg({ added, bad });
+    setImportMsg({ added, bad, fixed });
     setTab(ARCHIVE_TAB);
   }, [loadPath, pad]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const openFromArchive = (path) => { setTab(DEMO_TAB); loadPath(path); };
+  const openFromArchive = (path) => { setDemoMode("clips"); setTab(DEMO_TAB); loadPath(path); };
   const renameDemo = (path, title) =>
     setArchive((list) => list.map((d) => (d.path === path ? { ...d, title: title.trim() } : d)));
   const removeDemo = (path) => setArchive((list) => list.filter((d) => d.path !== path));
@@ -761,10 +784,12 @@ const voicePayload = useMemo(() => {
   useEffect(() => {
     const subs = [
       listen("render-progress", (e) => setProgress(e.payload)),
-      listen("render-done", () => { noteRender(); setRendering(false); setStage(""); setProgress(100); waitRef.current?.resolve(); waitRef.current = null; }),
+      listen("render-done", () => { noteRender(); hitGlobalRenders(); setRendering(false); setStage(""); setProgress(100); waitRef.current?.resolve(); waitRef.current = null; }),
       // «Смотреть» в уведомлении «хайлайт готов» — открываем клип на вкладке «Хайлайты»
       listen("open-clip", (e) => { setOpenClip(String(e.payload)); setTab(HIGHLIGHTS_TAB); }),
       listen("open-home", () => setTab(HOME_TAB)),
+      // рендер собрал не всё (CS2 упала посреди записи): клипы есть, но об обрыве надо сказать
+      listen("render-warning", (e) => setError(String(e.payload))),
       listen("render-error", (e) => { setRendering(false); setStage(""); setError(String(e.payload)); waitRef.current?.reject(new Error(String(e.payload))); waitRef.current = null; }),
     ];
     return () => subs.forEach((p) => p.then((f) => f()));
@@ -796,6 +821,8 @@ const voicePayload = useMemo(() => {
       .map((c) => trim
         ? { ...c, start: Math.max(0, c.start + Math.round((1.5 - pad.before) * 64)), end: c.end + Math.round((pad.after - 2) * 64) }
         : { ...c, start: Math.max(0, c.start - 192), end: c.end + 192 })
+      // долгий поиск между киллами — момент пишется кусками, render.rs склеит их обратно в один клип
+      .flatMap((c, gi) => (cutGaps ? splitGaps(c, gi) : [c]))
       .map((c) => ({
         ...c, slot: Number(playerSlot),
         hits: hurts.filter((h) => h.steamid === c.steamid && c.victims?.includes(h.victim)
@@ -815,8 +842,10 @@ const voicePayload = useMemo(() => {
       const recFps = blur || fxJob.slowmo || sel.some((c) => c.drops?.length) ? fps * 3 : fps;
       // повторы от лица жертвы добавляют к записи примерно половину длины клипов
       const secs = reuse ? 0 : sel.reduce((s, c) => s + (c.end - c.start) / 64, 0) * (fxJob.camVictim ? 1.6 : 1);
+      // самый длинный клип: сырьё лежит на диске только у пары клипов сразу, а не у всей записи
+      const maxClipSeconds = reuse ? 0 : Math.max(0, ...sel.map((c) => (c.end - c.start) / 64)) * (fxJob.camVictim ? 1.6 : 1);
       const issues = await invoke("preflight", { plan: {
-        out: paths.out, cs2: paths.cs2, hlae: paths.hlae, demo: demoPath0, width, height, recFps, seconds: secs,
+        out: paths.out, cs2: paths.cs2, hlae: paths.hlae, demo: demoPath0, width, height, recFps, seconds: secs, maxClipSeconds,
         gpu: !!(useGpu && gpuEnc), skins: !reuse && !o && !planIsEmpty(skinPlan),
       } }).catch(() => []);
       const text = (list) => list.map((i) => tr(i.text, ...i.args));
@@ -845,6 +874,16 @@ const voicePayload = useMemo(() => {
         setStage(tr("скачиваю ffmpeg..."));
         await ensureFfmpeg();
       }
+      // RTX-графика (ReShade с аддоном HLAE): скачивается один раз, ~10 МБ (src-tauri/src/reshade.rs)
+      if (!reuse && !o && fx.rtx) {
+        const un = await listen("reshade-progress", (e) => {
+          const [what, got, total] = e.payload;
+          setStage(tr("скачиваю {0}: {1} МБ", what, total > 0 ? `${got.toFixed(1)} / ${total.toFixed(1)}` : got.toFixed(1)));
+        });
+        setStage(tr("готовлю ReShade..."));
+        try { await invoke("ensure_reshade"); } finally { un(); }
+        stopped();
+      }
       if (!reuse) {
         setStage(tr("закрываю CS2..."));
         await invoke("close_cs2");
@@ -872,8 +911,10 @@ const voicePayload = useMemo(() => {
         setStage(tr("кинокамера..."));
         const kills = sel.map((c) => c.killTicks?.[c.killTicks.length - 1] ?? null);
         const orbitOn = !reuse && fx.camOrbit;
+        // облёт — после последнего фрага момента: у кусков с вырезанным поиском только на последнем
+        const orbitAt = (c, i) => (c.parts && c.part < c.parts - 1 ? null : kills[i]);
         const data = orbitOn
-          ? JSON.parse(await invoke("parse_cine", { path: demo.path, steamid: playerId, kills: JSON.stringify(kills.filter((k) => k != null)) }))
+          ? JSON.parse(await invoke("parse_cine", { path: demo.path, steamid: playerId, kills: JSON.stringify(sel.map(orbitAt).filter((k) => k != null)) }))
           : [];
         let di = 0;
         sel.forEach((c, i) => {
@@ -884,7 +925,7 @@ const voicePayload = useMemo(() => {
           const victims = fx.camVictim
             ? order.map(([t, v]) => ({ kill: t, slot: roster.find((p) => p.id === v)?.slot })).filter((v) => v.slot != null)
             : [];
-          const orbit = orbitOn ? orbitPath(data[di++], kill, c.end, fov) : null;
+          const orbit = orbitOn && orbitAt(c, i) != null ? orbitPath(data[di++], kill, c.end, fov) : null;
           c.cine = { kill, victimSlot: victims.at(-1)?.slot ?? null, victims, orbitXml: orbit?.xml ?? null, orbitEnd: orbit?.end ?? null };
         });
         stopped();
@@ -977,7 +1018,7 @@ const voicePayload = useMemo(() => {
         clips: sel, fps, blur, fov, width, height, crf, vmFov: vm.fov, vmX: vm.x, vmY: vm.y, vmZ: vm.z,
         voiceIndices: voicePayload.indices, voiceIndicesHigh: voicePayload.indicesHigh,
         gpuEncoder: useGpu && gpuEnc ? gpuEnc : null, ...fxJob, stamp, startKey, stretch: stretch && aspect === "4:3", merge: o ? false : merge.on, keepParts: merge.keep,
-        partsDir: o?.partsDir ?? null,
+        partsDir: o?.partsDir ?? null, reshade: o ? !!o.reshade : !reuse && !!fx.rtx,
         music: withMusic ? {
           path: music.path, offset: music.start, musicVol: music.musicVol, gameVol: music.gameVol,
           beatFx: music.beatFx ? music.beatMode || "zoom" : null, beatAmount: music.beatAmount ?? 1,
@@ -1005,7 +1046,7 @@ const voicePayload = useMemo(() => {
   const skinCount = Object.keys(skinPlan.weapons || {}).length + (skinPlan.knife ? 1 : 0) + (skinPlan.gloves ? 1 : 0);
   const studioSummary = {
     video: `${res.label} · ${aspect} · ${fps} fps${blur ? " · blur" : ""}`,
-    effects: onList([[fx.slowmo, "slow-mo"], [fx.damage, tr("урон")], [fx.killFlash, tr("вспышка")], [fx.hsZoom, tr("зум на HS")], [!!fx.atmo, tr(ATMOS.find((a) => a.id === fx.atmo)?.label ?? "").toLowerCase()], [fx.xray, "x-ray"], [fx.hud !== "full", fx.hud === "match" ? tr("HUD матча") : tr("килфид")]], tr("без эффектов")),
+    effects: onList([[fx.rtx, tr("кино-графика")], [fx.slowmo, "slow-mo"], [fx.damage, tr("урон")], [fx.killFlash, tr("вспышка")], [fx.hsZoom, tr("зум на HS")], [!!fx.atmo, tr(ATMOS.find((a) => a.id === fx.atmo)?.label ?? "").toLowerCase()], [fx.xray, "x-ray"], [fx.hud !== "full", fx.hud === "match" ? tr("HUD матча") : tr("килфид")]], tr("без эффектов")),
     camera: onList([[fx.camVictim, tr("повтор")], [fx.camOrbit, tr("облет")]], tr("обычная")),
     sound: onList([[voice !== "none", tr("голоса: {0}", tr(VOICE_MODES.find(([k]) => k === voice)?.[1] ?? "").toLowerCase())], [music.enabled && music.path, tr("трек")], [music.enabled && music.path && music.beatFx, tr("в такт")]], tr("звук игры")),
     skins: skinCount ? tr("изменено: {0}", skinCount) : tr("как в демке"),
@@ -1013,6 +1054,225 @@ const voicePayload = useMemo(() => {
   const estSize = Math.round(((picked.size * 14 + 10) * res.mbps) / 8);
 
   const resetPaths = () => setPaths({ ...DEFAULT_PATHS, out: defaultOut });
+
+  // Все настройки клипа — один блок с вкладками: короче страница, а сводка на вкладке показывает,
+  // что включено, не открывая её. В режиме «Эдит» — только «Видео» и «Звук» (те же настройки, общие с клипами)
+  const renderStudio = (edit = false) => {
+    const tabsShown = edit ? STUDIO_TABS.filter((t) => t.id === "video" || t.id === "sound") : STUDIO_TABS;
+    const st = tabsShown.some((t) => t.id === studioTab) ? studioTab : "sound";
+    return (
+    <Frame title={edit ? tr("Настройки эдита") : tr("Настройки клипа")} meta={edit ? tr("видео и трек для эдита") : tr("все, что попадет в рендер")} className={`span-2 studio ${edit ? "studio--edit" : ""}`}
+      help={tr("Настройки разложены по вкладкам. Под названием каждой вкладки - коротко, что сейчас включено.")}>
+      <div className="studio__tabs" role="tablist" aria-label={tr("Настройки клипа")}>
+        {tabsShown.map((t) => (
+          <button key={t.id} type="button" role="tab" aria-selected={st === t.id}
+            className={st === t.id ? "is-on" : ""} onClick={() => setStudioTab(t.id)}>
+            <span className="studio__ico" aria-hidden="true">{t.icon}</span>
+            <span className="studio__name">{tr(t.label)}</span>
+            <small className="studio__sum mono">{studioSummary[t.id]}</small>
+          </button>
+        ))}
+      </div>
+
+      <div className="studio__body" key={st}>
+        {st === "video" && (
+          <div className="studio-cols">
+            <div className="studio-col">
+              <span className="mono dim sub">{tr("пропорции")}<Hint text={tr("16:9 - YouTube и обычные видео, 9:16 - TikTok, Shorts и Reels, 1:1 - посты, 4:3 - растянутый \"про\"-формат.")} /></span>
+              <div className="ratios" role="radiogroup" aria-label={tr("Соотношение сторон")}>
+                {RATIOS.map((r) => (
+                  <button key={r} type="button" role="radio" aria-checked={aspect === r}
+                    className={aspect === r ? "is-on" : ""} onClick={() => setAspect(r)}>{r}</button>
+                ))}
+              </div>
+              <div className={`mu-sub ${aspect === "4:3" ? "is-open" : ""}`}>
+                <Toggle label={tr("Растянуть до 16:9")} hint={tr("Stretched, как в игре на 4:3 - во весь экран без черных полос")}
+                  checked={stretch} disabled={aspect !== "4:3"} onChange={setStretch}
+                  help={tr("Игра пишется в 4:3, а готовое видео растягивается по ширине до 16:9 - как выглядит игра у тех, кто играет на растянутом разрешении. Плееры и YouTube покажут его во весь экран, без полос по бокам.")} />
+              </div>
+              <Toggle label={tr("Склеить клипы в один ролик")} hint={tr("Несколько хайлайтов - одно видео подряд")}
+                checked={merge.on} onChange={(v) => setMerge((m) => ({ ...m, on: v }))}
+                help={tr("Если выбрано несколько моментов, после рендера они склеиваются в один ролик по порядку раундов. Видео не пережимается, поэтому склейка занимает секунды. Отдельные клипы по умолчанию убираются из папки, чтобы не мешали, но остаются доступны в \"До / после\".")} />
+              <div className={`mu-sub ${merge.on ? "is-open" : ""}`}>
+                <Toggle label={tr("Оставить и отдельные клипы")} hint={tr("Рядом с роликом будут лежать клипы по одному")}
+                  checked={merge.keep} disabled={!merge.on} onChange={(v) => setMerge((m) => ({ ...m, keep: v }))} />
+              </div>
+              <span className="mono dim sub">{tr("разрешение")}<Hint text={tr("Чем выше, тем четче картинка, но дольше запись и тяжелее файл.")} /></span>
+              <div className="presets" role="radiogroup" aria-label={tr("Разрешение")}>
+                {resOptions.map((r) => (
+                  <button key={r.id} role="radio" aria-checked={resId === r.id} type="button"
+                    className={resId === r.id ? "is-on" : ""} onClick={() => setResId(r.id)}>
+                    <b className="mono">{r.label}</b>
+                    <small className="mono dim">{r.width}×{r.height}</small>
+                  </button>
+                ))}
+              </div>
+              <Slider label={tr("Целевой FPS")} value={fps} min={30} max={240} step={30} onChange={setFps}
+                help={tr("Частота кадров готового клипа. 60 - стандарт для соцсетей, 120+ - для плавного монтажа и замедлений.")} />
+              <Slider label="FOV" value={fov} min={60} max={120} onChange={setFov}
+                help={tr("Угол обзора камеры. Больше - видно шире, но края картинки растягиваются. В игре по умолчанию 90.")} />
+            </div>
+            <div className="studio-col">
+              <Toggle label="Motion Blur" hint={tr("Смешивание субкадров")} checked={blur} onChange={setBlur}
+                help={tr("Игра пишется с тройной частотой кадров, и каждые три кадра смешиваются в один. Движения выглядят мягко и \"кинематографично\".")} />
+              <Toggle label={tr("Кодировать на GPU")}
+                help={tr("Сжимать видео на видеокарте, а не на процессоре. В разы быстрее, качество почти то же. Если не получится, программа сама перейдет на CPU.")}
+                hint={gpuEnc === undefined ? tr("Проверяю видеокарту...") : gpuEnc ? tr("{0} · в разы быстрее CPU", GPU_NAMES[gpuEnc]) : tr("Аппаратный кодировщик не найден")}
+                checked={useGpu && !!gpuEnc} disabled={!gpuEnc} onChange={setUseGpu} />
+              <Toggle label={tr("Обрезать тишину")} hint={tr("Убрать мертвое время вокруг фрага")} checked={trim} onChange={setTrim}
+                help={tr("Клип начинается и заканчивается рядом с киллами. Поля \"до\" и \"после\" задают, сколько секунд оставить вокруг них.")} />
+              <div className={`nums ${trim ? "" : "is-off"}`}>
+                <NumField label={tr("до, сек")} value={pad.before} onChange={(v) => setPad({ ...pad, before: v })} />
+                <NumField label={tr("после, сек")} value={pad.after} onChange={(v) => setPad({ ...pad, after: v })} />
+              </div>
+              <Toggle label={tr("Вырезать поиск между киллами")} hint={tr("Перерыв дольше {0} с - перемотка ближе к следующему киллу", GAP_DEFAULTS.gap)}
+                checked={cutGaps} onChange={setCutGaps}
+                help={tr("Если между киллами одного момента долго бегаешь по карте, середина вырезается: после килла остается {0} с, перед следующим - {1} с. Получается один клип со склейкой, HUD, урон, slow-mo и повторы считаются как обычно.", GAP_DEFAULTS.after, GAP_DEFAULTS.before)} />
+              <span className="mono dim sub">viewmodel<Hint text={tr("Положение оружия в руках на экране: угол обзора модели и смещение по осям X, Y, Z. Как viewmodel-настройки в игре.")} /></span>
+              <div className="nums nums--4">
+                <NumField label="fov" value={vm.fov} onChange={(v) => setVm({ ...vm, fov: v })} />
+                <NumField label="x" value={vm.x} onChange={(v) => setVm({ ...vm, x: v })} />
+                <NumField label="y" value={vm.y} onChange={(v) => setVm({ ...vm, y: v })} />
+                <NumField label="z" value={vm.z} onChange={(v) => setVm({ ...vm, z: v })} />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {st === "effects" && (
+          <>
+            <div className="toggles">
+              <Toggle label={tr("Кино-графика")} hint={tr("ReShade: тени, отраженный свет, отражения, кино-цвет")}
+                checked={fx.rtx} onChange={(v) => setFx({ ...fx, rtx: v })}
+                help={tr("Как в пресете Cinematic: игра записывается через ReShade с эффектами по глубине кадра - мягкие тени по углам, цветной свет от стен, отражения на полу и стеклах, свечение и кино-цвет. ReShade скачается при первом рендере (~10 МБ). MSAA в CS2 на время записи выключается и потом возвращается. При «Пересобрать без игры» остается как было записано.")} />
+              <Toggle label={tr("Slow-motion на фрагах")} hint={tr("Разгон → замедление → разгон вокруг каждого килла")}
+                checked={fx.slowmo} onChange={(v) => setFx({ ...fx, slowmo: v })}
+                help={tr("Вокруг каждого килла видео плавно замедляется примерно в 3 раза и снова разгоняется. Звук замедляется вместе с картинкой.")}
+                preview={<SlowmoCurve />} />
+              <Toggle label={tr("Цифры урона")} hint={tr("Всплывают у прицела, хедшоты желтым")}
+                checked={fx.damage} onChange={(v) => setFx({ ...fx, damage: v })}
+                help={tr("Рядом с прицелом всплывает урон, нанесенный тем, кого ты убил в этом клипе. Попадания в голову желтые. Рисуется поверх готового видео.")}
+                preview={
+                  <Shot src={shotHudMatch} ratio={CLEAN} crop>
+                    <span className="pv-dmg" style={{ left: "57%", top: "38%" }}>27</span>
+                    <span className="pv-dmg pv-dmg--head" style={{ left: "61%", top: "58%" }}>100</span>
+                  </Shot>
+                } />
+              <div>
+              <Toggle label={tr("Вспышка на килле")} hint={tr("Мягкое свечение кадра в момент фрага")}
+                checked={fx.killFlash} onChange={(v) => setFx({ ...fx, killFlash: v })}
+                help={tr("На каждом килле кадр за долю секунды мягко засвечивается: картинка будто светится изнутри, с легким оттенком, и плавно гаснет. Совпадает с киллом и при slow-mo.")}
+                preview={
+                  <Shot src={shotHudMatch} ratio={CLEAN} crop>
+                    <span className={`pv-flash pv-flash--${fx.flashColor}`} />
+                  </Shot>
+                } />
+              <div className={`mu-sub ${fx.killFlash ? "is-open" : ""}`}>
+                <div className="ratios flash-colors" role="radiogroup" aria-label={tr("Оттенок вспышки")}>
+                  {FLASH_COLORS.map(([k, l]) => (
+                    <button key={k} type="button" role="radio" aria-checked={fx.flashColor === k}
+                      className={fx.flashColor === k ? "is-on" : ""} onClick={() => setFx({ ...fx, flashColor: k })}>
+                      <i className={`flash-dot flash-dot--${k}`} />{tr(l)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              </div>
+              <Toggle label={tr("Зум на хедшот")} hint={tr("Кадр на полсекунды наезжает на цель при килле в голову")}
+                checked={fx.hsZoom} onChange={(v) => setFx({ ...fx, hsZoom: v })}
+                help={tr("На каждом убийстве в голову картинка быстро приближается к прицелу (там и была голова цели), держится четверть секунды и плавно возвращается. Время считается на готовом клипе, поэтому совпадает и при slow-mo.")}
+                preview={<Shot src={shotHudMatch} ratio={CLEAN} crop><span className="pv-hszoom" /></Shot>} />
+              <Toggle label="X-ray" hint={tr("Подсветка игроков сквозь стены · spec_show_xray")}
+                checked={fx.xray} onChange={(v) => setFx({ ...fx, xray: v })}
+                help={tr("Обводка игроков сквозь стены, как у наблюдателя в демке. Выключи, чтобы клип выглядел как обычная игра.")} />
+              <Toggle label={tr("Скрыть демо-панель")} hint={tr("Закрыть demoui перед записью")}
+                checked={fx.hideDemoUi} onChange={(v) => setFx({ ...fx, hideDemoUi: v })}
+                help={tr("Закрывает панель управления демкой (перемотка, скорость), чтобы она не попала в кадр.")} />
+            </div>
+            <hr className="sep" />
+            <span className="mono dim sub">{tr("интерфейс игры")}<Hint text={tr("Что из игрового HUD будет видно в записи.")} /></span>
+            <div className="ratios hud-modes" role="radiogroup" aria-label={tr("Интерфейс игры")}>
+              {HUD_MODES.map((m) => (
+                <button key={m.id} type="button" role="radio" aria-checked={fx.hud === m.id}
+                  aria-disabled={m.soon || undefined}
+                  className={`${fx.hud === m.id ? "is-on" : ""} ${m.soon ? "is-soon" : ""}`}
+                  onClick={() => !m.soon && setFx({ ...fx, hud: m.id })}>
+                  {tr(m.label)}{m.soon && <em className="soon">{tr("скоро")}</em>}<Hint text={tr(m.help)} preview={m.preview} />
+                </button>
+              ))}
+            </div>
+            <hr className="sep" />
+            <span className="mono dim sub">{tr("атмосфера")}<Hint text={tr("Время суток и погода. Цвет и свет меняются при сборке клипа, поэтому работает и \"Пересобрать без игры\".")} /></span>
+            <div className="ratios atmos" role="radiogroup" aria-label={tr("Атмосфера")}>
+              {ATMOS.map((a) => (
+                <button key={a.id || "off"} type="button" role="radio" aria-checked={fx.atmo === a.id}
+                  className={`atmo-btn atmo-btn--${a.id || "off"} ${fx.atmo === a.id ? "is-on" : ""}`}
+                  onClick={() => setFx({ ...fx, atmo: a.id })}>
+                  <i />{tr(a.label)}<Hint text={tr(a.help)} preview={a.preview} />
+                </button>
+              ))}
+            </div>
+            <div className={`mu-sub ${fx.atmo ? "is-open" : ""}`}>
+              <Toggle label={tr("Туман и небо в самой игре")} hint={tr("Экспериментально · fog_override и mirv_sky во время записи")}
+                checked={fx.atmoGame} disabled={!fx.atmo} onChange={(v) => setFx({ ...fx, atmoGame: v })}
+                help={tr("Кроме цветокоррекции, во время записи в CS2 включается туман нужного цвета, а небо и облака перекрашиваются через HLAE. Так дальние планы правда тонут в тумане. Если туман в клипе выглядит странно - выключи, останется только цветокоррекция.")} />
+            </div>
+          </>
+        )}
+
+        {st === "camera" && (
+          <div className="toggles">
+            <Toggle label={tr("Повтор от лица убитого")} hint={tr("После клипа - каждый фраг глазами его жертвы")}
+              checked={fx.camVictim} onChange={(v) => setFx({ ...fx, camVictim: v })}
+              help={tr("Клип идет как обычно - видно, как ты убиваешь. Потом по очереди для каждого килла демка отматывается примерно на 1.2 с назад и показывает его глазами убитого, до его смерти. Повторы дописываются в конец клипа: 4 килла - 4 коротких повтора по ~1.5 с.")} />
+            {fx.camVictim && (
+              <Toggle label={tr("Голосовой чат на повторе")} hint={tr("Выключен: на повторе слышно только игру")}
+                checked={!!fx.replayVoice} onChange={(v) => setFx({ ...fx, replayVoice: v })}
+                help={tr("Пока идет сам клип, голосовой чат звучит как выбрано во вкладке \"Звук\". На повторе от лица убитого он по умолчанию выключается, а к следующему клипу включается снова. Включи, если хочешь слышать голоса и на повторе.")} />
+            )}
+            <Toggle label={tr("Облет после фрага")} hint={tr("Кинокамера от третьего лица · экспериментально")}
+              checked={fx.camOrbit} onChange={(v) => setFx({ ...fx, camOrbit: v })}
+              help={tr("Сразу после последнего килла клипа камера HLAE (mirv_campath) плавно облетает игрока по дуге: начинает из-за плеча и уходит в сторону, слегка отдаляясь. HUD и руки с оружием на это время прячутся. Стены камера не учитывает - в тесном месте может заглянуть в текстуру.")} />
+          </div>
+        )}
+
+        {st === "sound" && (
+          <>
+            <span className="mono dim sub">{tr("голосовой чат")}<Hint text={tr("Чьи голоса из демки попадут в звук клипа: ничьи, всех, только твоей команды или только соперников.")} /></span>
+            <div className="ratios" role="radiogroup" aria-label={tr("Голосовой чат")}>
+              {VOICE_MODES.map(([k, l]) => (
+                <button key={k} type="button" role="radio" aria-checked={voice === k}
+                  className={voice === k ? "is-on" : ""} onClick={() => setVoice(k)}>{tr(l)}</button>
+              ))}
+            </div>
+            <hr className="sep" />
+            <MusicPanel music={music} setMusic={setMusic} hlae={paths.hlae} clipLen={clipLen} Toggle={Toggle} Hint={Hint} />
+          </>
+        )}
+
+        {st === "skins" && (
+          <SkinsPanel demo={demo} playerId={playerId} ranges={pickedRanges} plan={skinPlan} setPlan={setSkinPlan} />
+        )}
+      </div>
+    </Frame>
+    );
+  };
+
+  // переключатель режима вкладки «Демо»: клипы из одной демки / эдит из нескольких
+  const modeSwitch = (
+    <div className="demo-mode span-2" role="tablist" aria-label={tr("Что делаем")}>
+      {[
+        ["clips", tr("Клипы"), tr("хайлайты из одной демки")],
+        ["edit", tr("Эдит"), tr("монтаж под трек из нескольких демок")],
+      ].map(([k, name, sub]) => (
+        <button key={k} type="button" role="tab" aria-selected={demoMode === k} disabled={rendering && demoMode !== k}
+          className={`demo-mode__btn ${demoMode === k ? "is-on" : ""}`} onClick={() => setDemoMode(k)}>
+          <b>{name}</b>
+          <span className="mono dim">{sub}</span>
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <div className="app" ref={appRef}>
@@ -1030,7 +1290,7 @@ const voicePayload = useMemo(() => {
           {ink && <li className="tabs__ink" aria-hidden="true" style={{ "--x": `${ink.left}px`, width: ink.width }} />}
         </ul>
         <LiveStatus cs2={paths.cs2} rendering={rendering} progress={progress} archiveCount={archive.length}
-          onOpen={(path) => { setTab(DEMO_TAB); loadPath(path); }} />
+          onOpen={(path) => { setDemoMode("clips"); setTab(DEMO_TAB); loadPath(path); }} />
       </nav>
       {/* HLAE и ffmpeg качаются сами, если их нет: показываем, сколько осталось, или ошибку с повтором */}
       {(hlLoad || hlErr || ffLoad || ffErr) && (() => {
@@ -1055,12 +1315,14 @@ const voicePayload = useMemo(() => {
 
       {tab === HOME_TAB ? (
         <Home cs2={paths.cs2} faceitKey={faceitKey} onOpenDemo={openFromArchive}
-          onOpenEdit={(demos) => { setEditPreset({ demos, at: Date.now() }); setTab(EDIT_TAB); }} />
+          onOpenEdit={(demos) => { setEditPreset({ demos, at: Date.now() }); openEdit(); }} />
       ) : tab === PROFILE_TAB ? (
         <Profile faceitKey={faceitKey} onGoSettings={() => setTab(SETTINGS_TAB)} />
-      ) : tab === EDIT_TAB ? (
-        <main className="grid" key={tab}>
+      ) : tab === DEMO_TAB && demoMode === "edit" ? (
+        <main className="grid" key="demo-edit">
+          {modeSwitch}
           <NightEdit Frame={Frame} Hint={Hint} archive={archive} preset={editPreset} cs2={paths.cs2} hlae={paths.hlae} out={paths.out}
+            settings={renderStudio(true)}
             music={music} setMusic={setMusic} playerId={playerId} rendering={rendering} progress={progress} stage={stage}
             video={{
               fps, height: res.height, crf: res.crf, gpu: useGpu && gpuEnc ? gpuEnc : null,
@@ -1069,7 +1331,10 @@ const voicePayload = useMemo(() => {
             }}
             renderPart={(o) => startRender(false, o)}
             onDone={(file, show) => { if (show) { setOpenClip(file); setTab(HIGHLIGHTS_TAB); } }}
-            onGoSound={() => { setTab(DEMO_TAB); setStudioTab("sound"); }} />
+            onGoSound={() => {
+              setStudioTab("sound");
+              requestAnimationFrame(() => document.querySelector(".studio--edit")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+            }} />
         </main>
       ) : tab === HIGHLIGHTS_TAB ? (
         <main className="grid" key={tab}>
@@ -1091,6 +1356,7 @@ const voicePayload = useMemo(() => {
             {importMsg && (
               <div className="arc-msg">
                 <b>{tr("Добавлено в архив: {0}", importMsg.added)}</b>
+                {importMsg.fixed.map((f) => <span key={f} className="demo-fixed">{f}</span>)}
                 {importMsg.bad.map((b) => <span key={b} className="err">{b}</span>)}
               </div>
             )}
@@ -1278,9 +1544,12 @@ const voicePayload = useMemo(() => {
               {tr("Сбросить пути")}
             </button>
           </Frame>
+
+          <RenderCounter Frame={Frame} />
         </main>
       ) : (
-        <main className="grid" key={tab}>
+        <main className="grid" key="demo-clips">
+          {modeSwitch}
           <Frame title={tr("Демо-файл")} meta={demo ? tr("загружено") : tr("ожидание")} className="span-2">
             <div
               className={`drop ${over ? "is-over" : ""} ${demo ? "is-loaded" : ""}`}
@@ -1304,6 +1573,7 @@ const voicePayload = useMemo(() => {
                 </div>
               )}
             </div>
+            {fixNote && demo && <p className="demo-fixed">{fixNote}</p>}
             {error && <p className="mono err">{trError(error)}</p>}
           </Frame>
 
@@ -1410,191 +1680,7 @@ const voicePayload = useMemo(() => {
             )}
           </Frame>
 
-{/* Все настройки клипа — один блок с вкладками: короче страница, а сводка на вкладке
-              показывает, что включено, не открывая её */}
-          <Frame title={tr("Настройки клипа")} meta={tr("все, что попадет в рендер")} className="span-2 studio"
-            help={tr("Настройки разложены по вкладкам. Под названием каждой вкладки - коротко, что сейчас включено.")}>
-            <div className="studio__tabs" role="tablist" aria-label={tr("Настройки клипа")}>
-              {STUDIO_TABS.map((t) => (
-                <button key={t.id} type="button" role="tab" aria-selected={studioTab === t.id}
-                  className={studioTab === t.id ? "is-on" : ""} onClick={() => setStudioTab(t.id)}>
-                  <span className="studio__ico" aria-hidden="true">{t.icon}</span>
-                  <span className="studio__name">{tr(t.label)}</span>
-                  <small className="studio__sum mono">{studioSummary[t.id]}</small>
-                </button>
-              ))}
-            </div>
-
-            <div className="studio__body" key={studioTab}>
-              {studioTab === "video" && (
-                <div className="studio-cols">
-                  <div className="studio-col">
-                    <span className="mono dim sub">{tr("пропорции")}<Hint text={tr("16:9 - YouTube и обычные видео, 9:16 - TikTok, Shorts и Reels, 1:1 - посты, 4:3 - растянутый \"про\"-формат.")} /></span>
-                    <div className="ratios" role="radiogroup" aria-label={tr("Соотношение сторон")}>
-                      {RATIOS.map((r) => (
-                        <button key={r} type="button" role="radio" aria-checked={aspect === r}
-                          className={aspect === r ? "is-on" : ""} onClick={() => setAspect(r)}>{r}</button>
-                      ))}
-                    </div>
-                    <div className={`mu-sub ${aspect === "4:3" ? "is-open" : ""}`}>
-                      <Toggle label={tr("Растянуть до 16:9")} hint={tr("Stretched, как в игре на 4:3 - во весь экран без черных полос")}
-                        checked={stretch} disabled={aspect !== "4:3"} onChange={setStretch}
-                        help={tr("Игра пишется в 4:3, а готовое видео растягивается по ширине до 16:9 - как выглядит игра у тех, кто играет на растянутом разрешении. Плееры и YouTube покажут его во весь экран, без полос по бокам.")} />
-                    </div>
-                    <Toggle label={tr("Склеить клипы в один ролик")} hint={tr("Несколько хайлайтов - одно видео подряд")}
-                      checked={merge.on} onChange={(v) => setMerge((m) => ({ ...m, on: v }))}
-                      help={tr("Если выбрано несколько моментов, после рендера они склеиваются в один ролик по порядку раундов. Видео не пережимается, поэтому склейка занимает секунды. Отдельные клипы по умолчанию убираются из папки, чтобы не мешали, но остаются доступны в \"До / после\".")} />
-                    <div className={`mu-sub ${merge.on ? "is-open" : ""}`}>
-                      <Toggle label={tr("Оставить и отдельные клипы")} hint={tr("Рядом с роликом будут лежать клипы по одному")}
-                        checked={merge.keep} disabled={!merge.on} onChange={(v) => setMerge((m) => ({ ...m, keep: v }))} />
-                    </div>
-                    <span className="mono dim sub">{tr("разрешение")}<Hint text={tr("Чем выше, тем четче картинка, но дольше запись и тяжелее файл.")} /></span>
-                    <div className="presets" role="radiogroup" aria-label={tr("Разрешение")}>
-                      {resOptions.map((r) => (
-                        <button key={r.id} role="radio" aria-checked={resId === r.id} type="button"
-                          className={resId === r.id ? "is-on" : ""} onClick={() => setResId(r.id)}>
-                          <b className="mono">{r.label}</b>
-                          <small className="mono dim">{r.width}×{r.height}</small>
-                        </button>
-                      ))}
-                    </div>
-                    <Slider label={tr("Целевой FPS")} value={fps} min={30} max={240} step={30} onChange={setFps}
-                      help={tr("Частота кадров готового клипа. 60 - стандарт для соцсетей, 120+ - для плавного монтажа и замедлений.")} />
-                    <Slider label="FOV" value={fov} min={60} max={120} onChange={setFov}
-                      help={tr("Угол обзора камеры. Больше - видно шире, но края картинки растягиваются. В игре по умолчанию 90.")} />
-                  </div>
-                  <div className="studio-col">
-                    <Toggle label="Motion Blur" hint={tr("Смешивание субкадров")} checked={blur} onChange={setBlur}
-                      help={tr("Игра пишется с тройной частотой кадров, и каждые три кадра смешиваются в один. Движения выглядят мягко и \"кинематографично\".")} />
-                    <Toggle label={tr("Кодировать на GPU")}
-                      help={tr("Сжимать видео на видеокарте, а не на процессоре. В разы быстрее, качество почти то же. Если не получится, программа сама перейдет на CPU.")}
-                      hint={gpuEnc === undefined ? tr("Проверяю видеокарту...") : gpuEnc ? tr("{0} · в разы быстрее CPU", GPU_NAMES[gpuEnc]) : tr("Аппаратный кодировщик не найден")}
-                      checked={useGpu && !!gpuEnc} disabled={!gpuEnc} onChange={setUseGpu} />
-                    <Toggle label={tr("Обрезать тишину")} hint={tr("Убрать мертвое время вокруг фрага")} checked={trim} onChange={setTrim}
-                      help={tr("Клип начинается и заканчивается рядом с киллами. Поля \"до\" и \"после\" задают, сколько секунд оставить вокруг них.")} />
-                    <div className={`nums ${trim ? "" : "is-off"}`}>
-                      <NumField label={tr("до, сек")} value={pad.before} onChange={(v) => setPad({ ...pad, before: v })} />
-                      <NumField label={tr("после, сек")} value={pad.after} onChange={(v) => setPad({ ...pad, after: v })} />
-                    </div>
-                    <span className="mono dim sub">viewmodel<Hint text={tr("Положение оружия в руках на экране: угол обзора модели и смещение по осям X, Y, Z. Как viewmodel-настройки в игре.")} /></span>
-                    <div className="nums nums--4">
-                      <NumField label="fov" value={vm.fov} onChange={(v) => setVm({ ...vm, fov: v })} />
-                      <NumField label="x" value={vm.x} onChange={(v) => setVm({ ...vm, x: v })} />
-                      <NumField label="y" value={vm.y} onChange={(v) => setVm({ ...vm, y: v })} />
-                      <NumField label="z" value={vm.z} onChange={(v) => setVm({ ...vm, z: v })} />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {studioTab === "effects" && (
-                <>
-                  <div className="toggles">
-                    <Toggle label={tr("Slow-motion на фрагах")} hint={tr("Разгон → замедление → разгон вокруг каждого килла")}
-                      checked={fx.slowmo} onChange={(v) => setFx({ ...fx, slowmo: v })}
-                      help={tr("Вокруг каждого килла видео плавно замедляется примерно в 3 раза и снова разгоняется. Звук замедляется вместе с картинкой.")}
-                      preview={<SlowmoCurve />} />
-                    <Toggle label={tr("Цифры урона")} hint={tr("Всплывают у прицела, хедшоты желтым")}
-                      checked={fx.damage} onChange={(v) => setFx({ ...fx, damage: v })}
-                      help={tr("Рядом с прицелом всплывает урон, нанесенный тем, кого ты убил в этом клипе. Попадания в голову желтые. Рисуется поверх готового видео.")}
-                      preview={
-                        <Shot src={shotHudMatch} ratio={CLEAN} crop>
-                          <span className="pv-dmg" style={{ left: "57%", top: "38%" }}>27</span>
-                          <span className="pv-dmg pv-dmg--head" style={{ left: "61%", top: "58%" }}>100</span>
-                        </Shot>
-                      } />
-                    <div>
-                    <Toggle label={tr("Вспышка на килле")} hint={tr("Мягкое свечение кадра в момент фрага")}
-                      checked={fx.killFlash} onChange={(v) => setFx({ ...fx, killFlash: v })}
-                      help={tr("На каждом килле кадр за долю секунды мягко засвечивается: картинка будто светится изнутри, с легким оттенком, и плавно гаснет. Совпадает с киллом и при slow-mo.")}
-                      preview={
-                        <Shot src={shotHudMatch} ratio={CLEAN} crop>
-                          <span className={`pv-flash pv-flash--${fx.flashColor}`} />
-                        </Shot>
-                      } />
-                    <div className={`mu-sub ${fx.killFlash ? "is-open" : ""}`}>
-                      <div className="ratios flash-colors" role="radiogroup" aria-label={tr("Оттенок вспышки")}>
-                        {FLASH_COLORS.map(([k, l]) => (
-                          <button key={k} type="button" role="radio" aria-checked={fx.flashColor === k}
-                            className={fx.flashColor === k ? "is-on" : ""} onClick={() => setFx({ ...fx, flashColor: k })}>
-                            <i className={`flash-dot flash-dot--${k}`} />{tr(l)}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    </div>
-                    <Toggle label={tr("Зум на хедшот")} hint={tr("Кадр на полсекунды наезжает на цель при килле в голову")}
-                      checked={fx.hsZoom} onChange={(v) => setFx({ ...fx, hsZoom: v })}
-                      help={tr("На каждом убийстве в голову картинка быстро приближается к прицелу (там и была голова цели), держится четверть секунды и плавно возвращается. Время считается на готовом клипе, поэтому совпадает и при slow-mo.")}
-                      preview={<Shot src={shotHudMatch} ratio={CLEAN} crop><span className="pv-hszoom" /></Shot>} />
-                    <Toggle label="X-ray" hint={tr("Подсветка игроков сквозь стены · spec_show_xray")}
-                      checked={fx.xray} onChange={(v) => setFx({ ...fx, xray: v })}
-                      help={tr("Обводка игроков сквозь стены, как у наблюдателя в демке. Выключи, чтобы клип выглядел как обычная игра.")} />
-                    <Toggle label={tr("Скрыть демо-панель")} hint={tr("Закрыть demoui перед записью")}
-                      checked={fx.hideDemoUi} onChange={(v) => setFx({ ...fx, hideDemoUi: v })}
-                      help={tr("Закрывает панель управления демкой (перемотка, скорость), чтобы она не попала в кадр.")} />
-                  </div>
-                  <hr className="sep" />
-                  <span className="mono dim sub">{tr("интерфейс игры")}<Hint text={tr("Что из игрового HUD будет видно в записи.")} /></span>
-                  <div className="ratios hud-modes" role="radiogroup" aria-label={tr("Интерфейс игры")}>
-                    {HUD_MODES.map((m) => (
-                      <button key={m.id} type="button" role="radio" aria-checked={fx.hud === m.id}
-                        aria-disabled={m.soon || undefined}
-                        className={`${fx.hud === m.id ? "is-on" : ""} ${m.soon ? "is-soon" : ""}`}
-                        onClick={() => !m.soon && setFx({ ...fx, hud: m.id })}>
-                        {tr(m.label)}{m.soon && <em className="soon">{tr("скоро")}</em>}<Hint text={tr(m.help)} preview={m.preview} />
-                      </button>
-                    ))}
-                  </div>
-                  <hr className="sep" />
-                  <span className="mono dim sub">{tr("атмосфера")}<Hint text={tr("Время суток и погода. Цвет и свет меняются при сборке клипа, поэтому работает и \"Пересобрать без игры\".")} /></span>
-                  <div className="ratios atmos" role="radiogroup" aria-label={tr("Атмосфера")}>
-                    {ATMOS.map((a) => (
-                      <button key={a.id || "off"} type="button" role="radio" aria-checked={fx.atmo === a.id}
-                        className={`atmo-btn atmo-btn--${a.id || "off"} ${fx.atmo === a.id ? "is-on" : ""}`}
-                        onClick={() => setFx({ ...fx, atmo: a.id })}>
-                        <i />{tr(a.label)}<Hint text={tr(a.help)} preview={a.preview} />
-                      </button>
-                    ))}
-                  </div>
-                  <div className={`mu-sub ${fx.atmo ? "is-open" : ""}`}>
-                    <Toggle label={tr("Туман и небо в самой игре")} hint={tr("Экспериментально · fog_override и mirv_sky во время записи")}
-                      checked={fx.atmoGame} disabled={!fx.atmo} onChange={(v) => setFx({ ...fx, atmoGame: v })}
-                      help={tr("Кроме цветокоррекции, во время записи в CS2 включается туман нужного цвета, а небо и облака перекрашиваются через HLAE. Так дальние планы правда тонут в тумане. Если туман в клипе выглядит странно - выключи, останется только цветокоррекция.")} />
-                  </div>
-                </>
-              )}
-
-              {studioTab === "camera" && (
-                <div className="toggles">
-                  <Toggle label={tr("Повтор от лица убитого")} hint={tr("После клипа - каждый фраг глазами его жертвы")}
-                    checked={fx.camVictim} onChange={(v) => setFx({ ...fx, camVictim: v })}
-                    help={tr("Клип идет как обычно - видно, как ты убиваешь. Потом по очереди для каждого килла демка отматывается примерно на 1.2 с назад и показывает его глазами убитого, до его смерти. Повторы дописываются в конец клипа: 4 килла - 4 коротких повтора по ~1.5 с.")} />
-                  <Toggle label={tr("Облет после фрага")} hint={tr("Кинокамера от третьего лица · экспериментально")}
-                    checked={fx.camOrbit} onChange={(v) => setFx({ ...fx, camOrbit: v })}
-                    help={tr("Сразу после последнего килла клипа камера HLAE (mirv_campath) плавно облетает игрока по дуге: начинает из-за плеча и уходит в сторону, слегка отдаляясь. HUD и руки с оружием на это время прячутся. Стены камера не учитывает - в тесном месте может заглянуть в текстуру.")} />
-                </div>
-              )}
-
-              {studioTab === "sound" && (
-                <>
-                  <span className="mono dim sub">{tr("голосовой чат")}<Hint text={tr("Чьи голоса из демки попадут в звук клипа: ничьи, всех, только твоей команды или только соперников.")} /></span>
-                  <div className="ratios" role="radiogroup" aria-label={tr("Голосовой чат")}>
-                    {VOICE_MODES.map(([k, l]) => (
-                      <button key={k} type="button" role="radio" aria-checked={voice === k}
-                        className={voice === k ? "is-on" : ""} onClick={() => setVoice(k)}>{tr(l)}</button>
-                    ))}
-                  </div>
-                  <hr className="sep" />
-                  <MusicPanel music={music} setMusic={setMusic} hlae={paths.hlae} clipLen={clipLen} Toggle={Toggle} Hint={Hint} />
-                </>
-              )}
-
-              {studioTab === "skins" && (
-                <SkinsPanel demo={demo} playerId={playerId} ranges={pickedRanges} plan={skinPlan} setPlan={setSkinPlan} />
-              )}
-            </div>
-          </Frame>
+          {renderStudio()}
 
           <section className="launch span-2">
             <div className="launch__info mono">

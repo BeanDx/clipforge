@@ -98,6 +98,7 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
   const [fcAll, setFc] = useState([]); // последние матчи на FACEIT (faceit.rs)
   const [fcErr, setFcErr] = useState("");
   const [waiting, setWaiting] = useState(null); // { id, until } — ждём скачанную демку FACEIT
+  const [fcFixed, setFcFixed] = useState(0); // сколько забранных демок FACEIT было сломано курицей и исправлено
   const [valve, setValve] = useState(loadValve); // { at, list } — матчи Valve
   const [vBusy, setVBusy] = useState(false);
   const [vErr, setVErr] = useState("");
@@ -144,6 +145,8 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
   // забираем скачанные демки FACEIT из «Загрузок»: один раз при открытии и каждые 3 с, пока ждём файл
   const importDemos = () => cs2 && invoke("faceit_import", { cs2 }).then((got) => {
     if (got.length) { loadReplays(); setWaiting(null); }
+    const fixed = got.filter((d) => d.fixed).length;
+    if (fixed) setFcFixed(fixed);
   }).catch((e) => { setFcErr(trError(e)); setWaiting(null); });
   useEffect(() => { importDemos(); }, [cs2]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -438,6 +441,12 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
             </button>
           </span></header>
           {fcErr && <p className="hm-note hm-err mono">{fcErr}</p>}
+          {fcFixed > 0 && (
+            <p className="hm-note hm-fixed" title={tr("Курица-питомец попала в первый тик демки, и CS2 падала на playdemo. Данные курицы перенесены туда, где игра их ждёт; геймплей не изменился.")}>
+              {tr("🐔 Демка FACEIT была сломана (курица-питомец) — исправлено: {0}. Теперь она не крашит CS2.", fcFixed)}
+              {" "}<button type="button" className="hm-link" onClick={() => setFcFixed(0)}>{tr("ок")}</button>
+            </p>
+          )}
           {vErr && <p className="hm-note hm-err mono">{vErr}</p>}
           {valve && !vErr && !vBusy && (
             <p className="hm-note dim">

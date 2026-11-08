@@ -10,6 +10,7 @@ mod overlay;
 mod preflight;
 mod profile;
 mod render;
+mod reshade;
 mod sky;
 mod skins;
 mod toast;
@@ -67,6 +68,8 @@ pub fn run() {
       ffmpeg::ffmpeg_status,
       ffmpeg::ensure_ffmpeg,
       hlae::ensure_hlae,
+      reshade::reshade_status,
+      reshade::ensure_reshade,
       gallery::list_clips,
       gallery::clip_thumb,
       gallery::reveal_clip,
@@ -104,6 +107,8 @@ pub fn run() {
       }
     })
     .setup(|app| {
+      // запись Cinematic RTX могла оборваться (вылет программы) — вернуть настройки видео CS2
+      reshade::restore_video();
       // окно по умолчанию 1400×760 (tauri.conf.json), чтобы справа в шапке влезал живой статус;
       // на экране поменьше ужимаем до рабочей области (без панели задач), но не меньше минимума
       if let Some(w) = tauri::Manager::get_webview_window(app, "main") {

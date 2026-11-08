@@ -46,6 +46,9 @@ export function noteRender() {
   save(s);
 }
 
+// сколько рендеров сделано на этом компьютере
+export const renderCount = () => load().renders || 0;
+
 export const onAchievements = (f) => {
   window.addEventListener("cf-achievements", f);
   return () => window.removeEventListener("cf-achievements", f);
