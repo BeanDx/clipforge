@@ -84,7 +84,7 @@ fn dir_bytes(dir: &Path) -> u64 {
     }).sum()).unwrap_or(0)
 }
 
-fn writable(dir: &Path) -> bool {
+pub(crate) fn writable(dir: &Path) -> bool {
     if std::fs::create_dir_all(dir).is_err() { return false; }
     let probe = dir.join(".clipforge_write_test");
     let ok = std::fs::write(&probe, b"ok").is_ok();

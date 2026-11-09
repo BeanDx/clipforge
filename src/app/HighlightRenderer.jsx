@@ -27,7 +27,11 @@ import { loadReel, saveReel, reelEntry, entryVoice } from "../features/reel/reel
 import { Home } from "../features/home/Home";
 import { Profile } from "../features/profile/Profile";
 import { Updater, CHECK_EVENT as UPDATE_CHECK } from "../features/update/Updater";
+import { SetupWizard } from "../features/setup/SetupWizard";
+import { isFirstRun } from "../features/setup/setup";
 import { buildSkyEquirect, skyAzOfYaw } from "../features/edit/nightfx";
+import { Chicken } from "../features/chicken/Chicken";
+import { useChickenPrefs, setChickenPrefs } from "../features/chicken/prefs";
 import shotHudMatch from "../assets/previews/hud-match.webp";
 import shotHudDemo from "../assets/previews/hud-demo.webp";
 import "./highlight-renderer.css";
@@ -514,6 +518,7 @@ export default function HighlightRenderer() {
   const [faceit, setFaceit] = useState(null);
   const [faceitErr, setFaceitErr] = useState("");
   // мини-режим в трее: крестик прячет окно, статистика матчей пишется дальше (tray.rs)
+  const chickPrefs = useChickenPrefs();
   const [closeToTray, setCloseToTray] = useState(() => { try { return localStorage.getItem("cf-close-to-tray") !== "0"; } catch { return true; } });
   useEffect(() => {
     try { localStorage.setItem("cf-close-to-tray", closeToTray ? "1" : "0"); } catch {}
@@ -996,7 +1001,16 @@ const voicePayload = useMemo(() => {
   // Возвращает промис, который ждёт конца рендера (render-done).
   // list — выбранное из нескольких демок (src/features/reel): у каждого клипа своя c.demo, слот,
   // состав и попадания из его демки; всё за один запуск CS2, со всеми эффектами клипов
-  const startRender = async (reuse = false, o = null, list = null) => {
+  // test — тестовые 5 секунд из мастера первого запуска: без эффектов, голосов, трека и скинов,
+  // 60 fps без размытия — быстрая запись, по которой видно, что игра, HLAE и ffmpeg работают
+  const live = { fx, music, voice, merge, trim, cutGaps, fps, blur, pad };
+  const startRender = async (reuse = false, o = null, list = null, test = false) => {
+    const { fx, music, voice, merge, trim, cutGaps, fps, blur, pad } = test ? {
+      ...live, voice: "none", trim: true, pad: { before: 1.5, after: 2 }, cutGaps: false, fps: 60, blur: false, merge: { on: false, keep: false },
+      music: { ...live.music, enabled: false },
+      fx: { ...live.fx, slowmo: false, damage: false, xray: false, camVictim: false, replayVoice: false, voiceTail: false,
+        camOrbit: false, killFlash: false, atmo: "", hsZoom: false, rtx: false, ultra: false },
+    } : live;
     const rl = !o && list ? list : null;
     if (rl && !rl.length) return;
     if (!o && !rl && !validSlot) {
@@ -1068,11 +1082,11 @@ const voicePayload = useMemo(() => {
       const maxClipSeconds = reuse ? 0 : Math.max(0, ...sel.map((c) => (c.end - c.start) / 64)) * (fxJob.camVictim ? 1.6 : 1);
       const issues = await invoke("preflight", { plan: {
         out: paths.out, cs2: paths.cs2, hlae: paths.hlae, demo: demoPath0, width: ultraOn && !reuse ? width * 2 : width, height: ultraOn && !reuse ? height * 2 : height, ultra: ultraOn && !reuse, recFps, seconds: secs, maxClipSeconds,
-        gpu: !!(useGpu && gpuEnc), skins: !reuse && !o && (rl ? reelSkins(rl).length > 0 : !planIsEmpty(skinPlan)),
+        gpu: !!(useGpu && gpuEnc), skins: !reuse && !o && !test && (rl ? reelSkins(rl).length > 0 : !planIsEmpty(skinPlan)),
       } }).catch(() => []);
       const text = (list) => list.map((i) => tr(i.text, ...i.args));
       const errs = issues.filter((i) => i.level === "error");
-      if (errs.length) { setError(text(errs).join(" · ")); return; }
+      if (errs.length) { const m = text(errs).join(" · "); setError(m); if (test) throw new Error(m); return; }
       const warns = issues.filter((i) => i.level === "warn");
       if (warns.length && !await ask(`${text(warns).join("\n\n")}\n\n${tr("Все равно начать рендер?")}`,
         { title: tr("Проверка системы"), kind: "warning", okLabel: tr("Начать"), cancelLabel: tr("Отмена") })) return;
@@ -1238,7 +1252,7 @@ const voicePayload = useMemo(() => {
       if (!reuse && rl) {
         // в подборке — свои скины каждой демки и игрока (как выбраны на вкладке «Скины» у той демки):
         // клипы такой пары играются из её перекрашенной копии
-        const plans = reelSkins(rl);
+        const plans = test ? [] : reelSkins(rl);
         for (let k = 0; k < plans.length; k++) {
           stopped();
           const { demo: dp, steamid, plan } = plans[k];
@@ -1277,7 +1291,7 @@ const voicePayload = useMemo(() => {
       waitRef.current = null;
       throw e;
     }
-    return done;
+    return done.then(() => true);
   };
 
   // «Остановить»: до запуска игры прерывает подготовку, после — Rust закрывает игру и выходит
@@ -1285,6 +1299,24 @@ const voicePayload = useMemo(() => {
     cancelRef.current = true;
     setStage(tr("останавливаю..."));
     invoke("cancel_render").catch(() => {});
+  };
+
+  // Мастер первого запуска: открывается сам, пока его ни разу не проходили; повторно — из «Настроек»
+  const [setupOpen, setSetupOpen] = useState(isFirstRun);
+  // тест из мастера: лучший килл демки (свой, если ты есть в демке) — 3 с до него и 2 с после
+  const testRender = async (path) => {
+    const raw = JSON.parse(await invoke("parse_demo", { path }));
+    const r = parseDemo(raw, 64, 1.5, 2);
+    const me = new Set((await invoke("steam_users").catch(() => [])).map(String));
+    const withKill = r.clips.filter((c) => c.slot && c.killTicks?.length);
+    if (!withKill.length) throw new Error(tr("В этой демке не нашлось киллов - выбери другую"));
+    const own = withKill.filter((c) => me.has(String(c.steamid)));
+    const best = [...(own.length ? own : withKill)].sort((a, b) => (b.score ?? b.kills) - (a.score ?? a.kills))[0];
+    const k = best.killTicks[best.killTicks.length - 1];
+    const clip = { ...best, start: Math.max(0, k - 3 * 64), end: k + 2 * 64 };
+    const entry = reelEntry({ clip, demo: path, title: "test", player: best.name, slot: best.slot, roster: r.roster, hurts: r.hurts });
+    const ok = await startRender(false, null, [entry], true);
+    if (ok !== true) throw new Error(tr("Рендер не запустился"));
   };
 
   const canRender = (multi ? allPicked.length > 0 : demo && picked.size > 0 && validSlot) && !rendering && paths.hlae && paths.cs2 && paths.out;
@@ -1556,6 +1588,14 @@ const voicePayload = useMemo(() => {
     <div className="app" ref={appRef}>
       <div className="hazard" />
       <Updater />
+      {setupOpen && (
+        <SetupWizard lang={lang} paths={paths} setPaths={setPaths} defaultOut={defaultOut}
+          hlae={{ ready: hlaeReady, load: hlLoad, err: hlErr, retry: () => ensureHlae().catch(() => {}) }}
+          ff={{ ready: ffReady, load: ffLoad, err: ffErr, gpu: gpuEnc, retry: () => ensureFfmpeg().catch(() => {}) }}
+          startKey={startKey} setStartKey={setStartKey} keys={START_KEYS} archive={archive}
+          onTest={testRender} onStop={stopRender} rendering={rendering} progress={progress} stage={stage}
+          onClose={() => setSetupOpen(false)} onOpenHighlights={() => setTab(HIGHLIGHTS_TAB)} />
+      )}
       <nav className="topbar">
         <div className="brand"><i className="brand__mark" /><span>clipforge</span><em className="mono dim">cs2</em></div>
         <ul role="tablist" className="tabs">
@@ -1781,6 +1821,14 @@ const voicePayload = useMemo(() => {
               checked={autostart} onChange={toggleAutostart} />
           </Frame>
 
+          <Frame title={tr("Курица")} meta={chickPrefs.on ? tr("гуляет внизу окна") : tr("спит дома")} className="span-2"
+            help={tr("Живёт внизу окна. Её можно гладить курсором, тыкать (только не перестарайся), хватать и бросать. Во время рендера слушает музыку, на готовом рендере радуется, на ошибке паникует. Иногда несёт яйца. На кнопках никогда не стоит.")}>
+            <Toggle label={tr("Показывать курицу")} hint={tr("гуляет по низу окна и реагирует на рендер")}
+              checked={chickPrefs.on} onChange={(v) => setChickenPrefs({ on: v })} />
+            <Toggle label={tr("Звуки курицы")} hint={tr("тихое кудахтанье, только когда окно в фокусе")}
+              checked={chickPrefs.sound} disabled={!chickPrefs.on} onChange={(v) => setChickenPrefs({ sound: v })} />
+          </Frame>
+
           <Frame title={tr("Проверка системы")} meta={tr("перед каждым рендером")} className="span-2"
             help={tr("Перед рендером clipforge сам проверяет место на диске, пути к игре и HLAE, драйвер видеокарты и питание ноутбука. Здесь можно посмотреть сводку заранее.")}>
             {sysInfo ? (
@@ -1812,6 +1860,15 @@ const voicePayload = useMemo(() => {
               <div className="about__row"><span className="mono dim">{tr("движок записи")}</span><span className="mono">HLAE + ffmpeg</span></div>
               <div className="about__row"><span className="mono dim">{tr("парсер демок")}</span><span className="mono">demoparser2</span></div>
             </div>
+          </Frame>
+
+          <Frame title={tr("Мастер настройки")} meta={tr("игра · запись · тест")}>
+            <p className="dim" style={{ margin: 0 }}>
+              {tr("Пройти первую настройку заново: найти CS2, проверить HLAE и папку, записать тестовые 5 секунд.")}
+            </p>
+            <button type="button" className="go go--ghost" disabled={rendering} onClick={() => setSetupOpen(true)}>
+              {tr("Открыть мастер")}
+            </button>
           </Frame>
 
           <Frame title={tr("Сброс")} meta={tr("локальные настройки")}>
@@ -2023,6 +2080,7 @@ const voicePayload = useMemo(() => {
           </div>
         </div>
       )}
+      <Chicken rendering={rendering} progress={progress} over={over} error={error} />
     </div>
   );
 }

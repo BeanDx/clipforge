@@ -1,0 +1,256 @@
+/* Курица внизу окна (Chicken.jsx). Поза и анимации — по классу состояния на .ck */
+
+.ck {
+  position: fixed; left: 0; bottom: 6px; z-index: 6;
+  width: 64px; height: 64px;
+  pointer-events: none; will-change: transform;
+  --lid: .38; --px: 0; --py: 0; --dir: 1;
+}
+.ck__flip { width: 100%; height: 100%; transform: scaleX(var(--dir)); transition: transform .16s ease; }
+.ck__squash { width: 100%; height: 100%; transform-origin: 50% 100%; transition: transform .2s ease; }
+.ck-svg { display: block; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 1.5px 0 rgba(0, 0, 0, .4)); }
+.ck-svg g, .ck-svg path, .ck-svg circle, .ck-svg ellipse { transform-box: view-box; }
+.ck__hit {
+  position: absolute; left: 14%; right: 14%; top: 14%; bottom: 0;
+  pointer-events: auto; cursor: grab; touch-action: none; border-radius: 46% 46% 40% 40%;
+}
+.ck--drag .ck__hit { cursor: grabbing; }
+
+.ck-shadow {
+  position: fixed; left: 0; bottom: 3px; z-index: 5; width: 64px; height: 8px;
+  pointer-events: none; transform-origin: 50% 50%;
+  background: radial-gradient(closest-side, rgba(0, 0, 0, .55), transparent);
+}
+
+/* ——— цвета ——— */
+.ck-f0 { fill: #f3eee4; }
+.ck-f1 { fill: #e9e2d4; }
+.ck-f2 { fill: #ddd4c2; }
+.ck-shade { fill: #d4c9b4; opacity: .75; }
+.ck-wingline { fill: none; stroke: #c7bba4; stroke-width: 1.2; stroke-linecap: round; }
+.ck-shin { stroke: #e9a23b; stroke-width: 3.2; stroke-linecap: round; fill: none; }
+.ck-foot { stroke: #e9a23b; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+.ck-comb { fill: #e5484d; transform-origin: 64px 25px; transition: transform .2s; }
+.ck-wattle { fill: #d33c42; }
+.ck-beak-up { fill: #f5b324; }
+.ck-beak-lo { fill: #df9516; transform-origin: 75.5px 38.6px; transition: transform .07s; }
+.ck-white { fill: #fff; }
+.ck-pupil { fill: #12151a; }
+.ck-glint { fill: #fff; }
+.ck-pupil, .ck-glint { transform: translate(calc(var(--px) * 1px), calc(var(--py) * 1px)); }
+.ck-svg .ck-lid {
+  fill: #f3eee4; transform-box: fill-box; transform-origin: 50% 0;
+  transform: scaleY(var(--lid)); animation: ck-blink 5.3s infinite;
+}
+.ck-happy, .ck-shut, .ck-brow { fill: none; stroke: #12151a; stroke-linecap: round; display: none; }
+.ck-happy, .ck-shut { stroke-width: 1.7; }
+.ck-brow { stroke-width: 2.1; }
+.ck-helm, .ck-phones, .ck-steam, .ck-stars { display: none; }
+.ck-helm path:first-child { fill: #34404f; }
+.ck-helm-rim { stroke: #232c37; stroke-width: 2.6; stroke-linecap: round; fill: none; }
+.ck-helm-strap { stroke: #232c37; stroke-width: 1.2; fill: none; }
+.ck-phones-band { fill: none; stroke: #1c2430; stroke-width: 3.4; stroke-linecap: round; }
+.ck-phones rect { fill: #222c38; }
+.ck-phones .ck-phones-led { fill: #2ee6c0; animation: ck-led 1s steps(2) infinite; }
+.ck-steam circle { fill: #c9d1da; opacity: .85; }
+.ck-stars path { fill: #f5c518; }
+
+/* ——— базовая жизнь: дыхание, хвост, моргание ——— */
+.ck-pose { transition: transform .3s ease; }
+.ck-legs { transform-origin: 50px 76px; transition: transform .25s ease; }
+.ck-bodyg { transform-origin: 50px 92px; animation: ck-breathe 2.8s ease-in-out infinite; }
+.ck-tail { transform-origin: 32px 56px; animation: ck-tail 3.4s ease-in-out infinite; }
+.ck-head { transform-origin: 60px 48px; transition: transform .25s ease; }
+.ck-wing { transform-origin: 58px 58px; transition: transform .2s ease; }
+.ck-leg--a { transform-origin: 45px 76px; }
+.ck-leg--b { transform-origin: 54px 76px; }
+
+@keyframes ck-blink { 0%, 93%, 100% { transform: scaleY(var(--lid)); } 95.5% { transform: scaleY(1); } }
+@keyframes ck-breathe { 50% { transform: scale(1.015, 1.035); } }
+@keyframes ck-tail { 0%, 78%, 100% { transform: none; } 84% { transform: rotate(-9deg); } 90% { transform: rotate(5deg); } }
+@keyframes ck-led { 50% { opacity: .35; } }
+
+/* ходьба */
+.ck--walk .ck-leg--a, .ck--walk .ck-leg--b { animation: ck-step .5s ease-in-out infinite; }
+.ck--walk .ck-leg--b { animation-delay: -.25s; }
+.ck--walk .ck-bodyg { animation: ck-bob .25s ease-in-out infinite alternate; }
+.ck--walk .ck-head { animation: ck-nod .5s ease-in-out infinite; }
+.ck--side { --lid: .55; }
+@keyframes ck-step { 0%, 100% { transform: rotate(22deg); } 50% { transform: rotate(-22deg); } }
+@keyframes ck-bob { to { transform: translateY(-1.6px); } }
+@keyframes ck-nod { 0%, 30%, 100% { transform: none; } 55% { transform: translateX(3.5px); } }
+
+/* бег */
+.ck--run .ck-leg--a, .ck--run .ck-leg--b { animation: ck-run-step .22s linear infinite; }
+.ck--run .ck-leg--b { animation-delay: -.11s; }
+.ck--run .ck-bodyg { animation: ck-bob .11s ease-in-out infinite alternate; }
+.ck--run .ck__squash { transform: rotate(9deg); }
+.ck--run .ck-wing { animation: ck-flap .14s ease-in-out infinite alternate; }
+.ck--run .ck-head { transform: translateX(2px); }
+@keyframes ck-run-step { 0%, 100% { transform: rotate(38deg); } 50% { transform: rotate(-38deg); } }
+@keyframes ck-flap { from { transform: rotate(0); } to { transform: rotate(34deg); } }
+
+.ck--panic, .ck--alert, .ck--air, .ck--party { --lid: 0; }
+.ck--panic .ck-wing { animation-duration: .09s; }
+.ck--panic .ck-comb { transform: rotate(-8deg) scale(1.08); }
+
+/* клюёт */
+.ck--peck .ck-bodyg { animation: ck-peck-body 1.5s ease-in-out both; }
+.ck--peck .ck-head { animation: ck-peck-head 1.5s ease-in-out both; }
+@keyframes ck-peck-body { 0%, 100% { transform: none; } 15%, 82% { transform: rotate(20deg); } }
+@keyframes ck-peck-head {
+  0%, 15%, 100% { transform: none; }
+  25%, 45%, 65% { transform: rotate(46deg) translate(2px, 8px); }
+  35%, 55%, 75% { transform: rotate(24deg); }
+}
+
+/* сидит (и все сидячие: сон, наушники, яйцо) */
+.ck--sit .ck-pose { transform: translateY(12px); }
+.ck--sit .ck-legs { transform: scaleY(0); }
+.ck--sit { --lid: .45; }
+
+.ck--sleep .ck-eye, .ck--lay .ck-eye { display: none; }
+.ck--sleep .ck-shut, .ck--lay .ck-shut { display: inline; }
+.ck--sleep .ck-head { transform: rotate(14deg) translate(-2px, 3px); }
+.ck--sleep .ck-bodyg { animation-duration: 4.4s; }
+.ck--sleep .ck-tail { animation: none; }
+
+.ck--watch { --lid: .5; }
+.ck--watch .ck-phones { display: inline; }
+.ck--watch .ck-head { animation: ck-vibe .52s ease-in-out infinite; }
+.ck--watch .ck-tail { animation: ck-vibe-tail .52s ease-in-out infinite; }
+@keyframes ck-vibe { 0%, 100% { transform: none; } 50% { transform: rotate(9deg) translateY(1.5px); } }
+@keyframes ck-vibe-tail { 50% { transform: rotate(-7deg); } }
+
+.ck--lay .ck-bodyg { animation: ck-wiggle .14s linear infinite; }
+@keyframes ck-wiggle { 0%, 100% { transform: translateX(-1.2px); } 50% { transform: translateX(1.2px); } }
+
+/* осматривается */
+.ck--look .ck-head { animation: ck-look 2s ease-in-out both; }
+@keyframes ck-look { 0%, 100% { transform: none; } 25%, 45% { transform: rotate(-14deg); } 65%, 85% { transform: rotate(10deg) translateX(1px); } }
+
+/* в воздухе / в руке */
+.ck--air .ck-wing { animation: ck-flap .12s ease-in-out infinite alternate; }
+.ck--air .ck-leg--a { transform: rotate(14deg); }
+.ck--air .ck-leg--b { transform: rotate(-10deg); }
+.ck--drag .ck-leg--a, .ck--drag .ck-leg--b { animation: ck-run-step .2s linear infinite; }
+.ck--drag .ck-leg--b { animation-delay: -.1s; }
+.ck--drag .ck__squash { transform: scale(.94, 1.08); }
+.ck--drag .ck-beak-lo { transform: rotate(24deg); }
+
+/* приземлилась */
+.ck--land .ck__squash { animation: ck-squash .38s ease-out; }
+@keyframes ck-squash { 0% { transform: scale(1.22, .74); } 45% { transform: scale(.94, 1.06); } 100% { transform: none; } }
+
+/* голова кругом */
+.ck--dizzy { --lid: .6; }
+.ck--dizzy .ck-stars { display: inline; transform-origin: 64px 17px; animation: ck-spin 1s linear infinite; }
+.ck--dizzy .ck-head { animation: ck-wobble .6s ease-in-out infinite; }
+.ck--dizzy .ck__squash { animation: ck-squash .4s ease-out; }
+@keyframes ck-spin { to { transform: rotate(360deg); } }
+@keyframes ck-wobble { 0%, 100% { transform: rotate(-8deg); } 50% { transform: rotate(8deg); } }
+
+/* обиделась */
+.ck--angry { --lid: .28; }
+.ck--angry .ck-brow { display: inline; }
+.ck--angry .ck-steam { display: inline; }
+.ck--angry .ck-steam circle { animation: ck-steam .7s ease-out infinite; }
+.ck--angry .ck-steam circle:nth-child(2) { animation-delay: .23s; }
+.ck--angry .ck-steam circle:nth-child(3) { animation-delay: .46s; }
+.ck--angry .ck-bodyg { animation: ck-puff .25s ease-out both; }
+.ck--angry .ck__squash { animation: ck-shake .08s linear infinite; }
+.ck--angry .ck-wing { transform: rotate(26deg); }
+.ck--angry .ck-tail { animation: none; transform: rotate(-14deg); }
+.ck--angry .ck-comb { transform: scale(1.15); }
+@keyframes ck-puff { to { transform: scale(1.13); } }
+@keyframes ck-shake { 0%, 100% { transform: translateX(-1px); } 50% { transform: translateX(1px); } }
+@keyframes ck-steam { from { transform: translateY(0) scale(.6); opacity: .9; } to { transform: translateY(-9px) scale(1.3); opacity: 0; } }
+
+/* выглядывает из-за края: подозрительный прищур */
+.ck--peek { --lid: .58; }
+.ck--peek .ck-head { transform: rotate(-6deg); }
+
+/* радуется */
+.ck--party .ck-wing { animation: ck-flap .16s ease-in-out infinite alternate; }
+.ck--party .ck-head { transform: rotate(-12deg); }
+.ck--party .ck-tail { animation: ck-vibe-tail .2s ease-in-out infinite; }
+
+/* насторожилась (тащат файл) */
+.ck--alert .ck-head { transform: translateY(-3px) rotate(-8deg); }
+.ck--alert .ck-wing { transform: rotate(16deg); }
+
+/* гладят */
+.ck--pet .ck-eye { display: none; }
+.ck--pet .ck-happy { display: inline; }
+.ck--pet .ck-bodyg { animation: ck-sway 1.2s ease-in-out infinite; }
+.ck--pet .ck-head { transform: rotate(-9deg) translate(-1px, 1px); }
+.ck--pet .ck-tail { animation: ck-vibe-tail .3s ease-in-out infinite; }
+@keyframes ck-sway { 0%, 100% { transform: none; } 50% { transform: rotate(-3deg) scale(1.01, 1.03); } }
+
+/* открытый клюв */
+.ck--talk .ck-beak-lo { transform: rotate(24deg); }
+
+/* каска CT */
+.ck--helmet .ck-helm { display: inline; }
+.ck--helmet .ck-comb { display: none; }
+
+/* ——— облачко над головой ——— */
+.ck__bubble {
+  position: absolute; bottom: calc(100% - 2px); left: calc(50% + var(--dir) * 12px);
+  transform: translateX(-50%); padding: 2px 7px;
+  background: #0c1016; border: 1px solid #2c3a4b; color: #f5c518;
+  font-size: .7rem; font-weight: 700; white-space: nowrap; letter-spacing: .04em;
+  animation: ck-pop .22s cubic-bezier(.3, 1.6, .5, 1);
+}
+@keyframes ck-pop { from { transform: translateX(-50%) scale(.4); opacity: 0; } }
+.ck__zzz { position: absolute; left: calc(50% + var(--dir) * 8px); bottom: 64%; color: #6c7a8c; font-size: .8rem; font-weight: 700; }
+.ck__zzz i { position: absolute; font-style: normal; opacity: 0; animation: ck-z 2.4s linear infinite; }
+.ck__zzz i:nth-child(2) { animation-delay: .8s; }
+.ck__zzz i:nth-child(3) { animation-delay: 1.6s; }
+@keyframes ck-z {
+  0% { opacity: 0; transform: translate(0, 0) scale(.7); }
+  20% { opacity: 1; }
+  100% { opacity: 0; transform: translate(calc(var(--dir) * 16px), -28px) scale(1.25); }
+}
+
+/* ——— перья ——— */
+.ck-fx { position: fixed; inset: 0; z-index: 6; pointer-events: none; overflow: hidden; }
+.ck-feather {
+  position: absolute; width: 14px; height: 7px; margin: -3px 0 0 -7px; line-height: 0;
+  animation: ck-feather var(--d) cubic-bezier(.2, .6, .4, 1) forwards;
+}
+@keyframes ck-feather {
+  0% { transform: translate(0, 0) rotate(var(--r0)); opacity: 1; }
+  30% { transform: translate(var(--dx), var(--dy)) rotate(calc(var(--r0) + 90deg)); opacity: 1; }
+  65% { transform: translate(calc(var(--dx) * 1.15 + var(--sw)), calc(var(--dy) + var(--fall) * .5)) rotate(calc(var(--r1) * .6)); }
+  100% { transform: translate(calc(var(--dx) * 1.25 - var(--sw)), calc(var(--dy) + var(--fall))) rotate(var(--r1)); opacity: 0; }
+}
+
+/* ——— яйцо и цыплёнок ——— */
+.ck-egg {
+  position: fixed; bottom: 6px; z-index: 6; width: 18px; height: 22px; cursor: pointer;
+  border-radius: 50% 50% 46% 46% / 60% 60% 40% 40%;
+  background: radial-gradient(circle at 35% 30%, #fffaf0, #e6d9c2 72%);
+  box-shadow: 0 2px 0 rgba(0, 0, 0, .4);
+  transform-origin: 50% 100%;
+  animation: ck-egg-in .35s ease-out, ck-egg-wobble 3.2s 1s ease-in-out infinite;
+}
+.ck-egg:hover { filter: brightness(1.08); }
+.ck-egg.is-crack { animation: ck-crack .52s ease-in forwards; }
+@keyframes ck-egg-in { from { transform: scale(.3); } }
+@keyframes ck-egg-wobble { 0%, 80%, 100% { transform: none; } 85% { transform: rotate(-9deg); } 90% { transform: rotate(7deg); } 95% { transform: rotate(-4deg); } }
+@keyframes ck-crack {
+  0%, 60% { transform: rotate(0); }
+  15% { transform: rotate(-12deg); } 30% { transform: rotate(12deg); } 45% { transform: rotate(-8deg); }
+  100% { transform: scale(1.5, .2); opacity: 0; }
+}
+
+.ck-chick {
+  position: fixed; left: 0; bottom: 6px; z-index: 6; width: 28px; height: 28px;
+  cursor: pointer; touch-action: none; will-change: transform;
+}
+.ck-chick__svg { display: block; width: 100%; height: 100%; overflow: visible; transform: scaleX(var(--cdir, 1)); transition: transform .15s; filter: drop-shadow(0 1px 0 rgba(0, 0, 0, .4)); }
+.ck-chick__legs path { stroke: #e9a23b; stroke-width: 2; stroke-linecap: round; fill: none; }
+.ck-chick__body { transform-box: view-box; transform-origin: 20px 36px; animation: ck-breathe 2s ease-in-out infinite; }
+.ck-chick.is-walk .ck-chick__body { animation: ck-chick-hop .2s ease-in-out infinite alternate; }
+@keyframes ck-chick-hop { to { transform: translateY(-2px) rotate(4deg); } }

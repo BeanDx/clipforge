@@ -12,6 +12,7 @@ mod preflight;
 mod profile;
 mod render;
 mod reshade;
+mod setup;
 mod sky;
 mod skins;
 mod toast;
@@ -98,6 +99,7 @@ pub fn run() {
       tray::set_autostart,
       preflight::preflight,
       preflight::system_info,
+      setup::setup_scan,
       display::ultra_check,
       valve::valve_recent,
       valve::valve_download
