@@ -97,6 +97,10 @@ struct Live {
     weapon: String,
     prev_weapon: String, // оружие в прошлом сообщении: нож — только если он был в руках и до килла
     session: Option<SessionRec>,
+    // где идёт текущий матч (ServerInfo.kind) и название комьюнити-сервера — запоминаем по ходу матча:
+    // при выходе в меню строка подключения в логе уже сброшена
+    src: String,
+    src_name: String,
     last_seen: u64,
     live: Value, // последнее сообщение — для «сейчас в игре» на главной
 }
@@ -121,6 +125,8 @@ fn with_history<R>(f: impl FnOnce(&mut History) -> R) -> R {
             m.rounds.retain(|r| r.marked);
             for r in &mut m.rounds { r.tags = vec!["закладка".into()]; }
         }
+        // карты из мастерской попадали в статистику в прошлых версиях
+        h.matches.retain(|m| !workshop_map(&m.map));
         *g = Some(h);
     }
     f(g.as_mut().unwrap())
@@ -186,9 +192,28 @@ fn close_round(l: &mut Live) {
     l.rk = 0; l.rhs = 0; l.rknife = false; l.rmarked = false;
 }
 
+// Карта из мастерской: GSI называет её «workshop/<id>/<имя>»
+fn workshop_map(map: &str) -> bool { map.contains('/') || map.starts_with("workshop") }
+
+// Идёт ли матч в статистику: только официальные серверы Valve и FACEIT. Комьюнити-серверы (DM, aim, retake…),
+// игра с ботами, карты из мастерской, просмотр демок и рендер (CS2 под HLAE) — нет.
+// Без -condebug сервер не узнать — тогда отсекаем только мастерскую и рендер.
+fn counts(l: &Live, m: &MatchRec) -> bool {
+    if workshop_map(&m.map) { return false; }
+    if crate::render::process_running("HLAE.exe") { return false; }
+    match l.src.as_str() {
+        "demo" | "local" => false,
+        "community" => l.src_name.to_lowercase().contains("faceit")
+            || crate::render::process_running("faceitclient.exe")
+            || crate::render::process_running("FACEIT.exe"),
+        _ => true,
+    }
+}
+
 fn finish_match(l: &mut Live, app: &AppHandle, finished: bool) {
     close_round(l);
     let Some(mut m) = l.cur.take() else { return };
+    if !counts(l, &m) { return; }
     m.ended = Some(now_ms());
     m.finished = finished;
     if finished && !roundless(&m.mode) {
@@ -295,9 +320,13 @@ fn handle(app: &AppHandle, v: Value) {
                 started: now, ..Default::default()
             });
             l.round_no = 0; l.rk = 0; l.rhs = 0; l.prev_rhs = 0; l.rknife = false; l.rmarked = false; l.last_kills = 0;
+            l.src.clear(); l.src_name.clear();
         }
     }
     if l.cur.is_some() {
+        let srv = server_now(l.session.as_ref().map(|s| s.started).unwrap_or(0));
+        if !srv.kind.is_empty() { l.src = srv.kind; }
+        if !srv.name.is_empty() { l.src_name = srv.name; }
         // map.round — сколько раундов сыграно: идёт раунд номер map.round + 1
         let played = s_u32(&v, &["map", "round"]).unwrap_or(0);
         let round_now = played + 1;
