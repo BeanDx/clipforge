@@ -38,6 +38,9 @@ pub struct Plan {
     gpu: bool,
     // демка переписывается со скинами — рядом ляжет её копия
     skins: bool,
+    // «Мега-качество»: width×height — уже двойной кадр; окно такого размера должно влезть в экран
+    #[serde(default)]
+    ultra: bool,
 }
 
 const GB: f64 = 1024.0 * 1024.0 * 1024.0;
@@ -120,6 +123,11 @@ fn gpus() -> &'static Vec<Gpu> {
     })
 }
 
+// Названия видеокарт (для подсказки «Мега-качества»: где включить VSR / DSR)
+pub(crate) fn gpu_names() -> Vec<String> {
+    gpus().iter().map(|g| g.name.clone()).collect()
+}
+
 // Дней с 1970-01-01 для даты (алгоритм Хиннанта)
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
@@ -186,6 +194,9 @@ fn run(p: &Plan) -> Vec<Issue> {
     }
     if recording {
         check_gpus(&mut v);
+        if p.ultra && !crate::display::can_fit(p.width, p.height) {
+            v.push(issue("warn", "Для Мега-качества нужен экран больше {0}x{1}, а таких режимов нет. Включи AMD VSR (Adrenalin → шестеренка → Display → Virtual Super Resolution) или NVIDIA DSR - иначе клипы запишутся в обычном разрешении", vec![p.width.to_string(), p.height.to_string()]));
+        }
         if on_battery() {
             v.push(issue("warn", "Ноутбук работает от батареи: видеокарта может сбросить частоты, и запись пойдёт медленнее. Лучше подключить зарядку", vec![]));
         }

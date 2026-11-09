@@ -1,5 +1,6 @@
 mod faceit;
 mod friends;
+mod display;
 mod ffmpeg;
 mod gallery;
 mod gsi;
@@ -97,6 +98,7 @@ pub fn run() {
       tray::set_autostart,
       preflight::preflight,
       preflight::system_info,
+      display::ultra_check,
       valve::valve_recent,
       valve::valve_download
     ])
@@ -109,6 +111,8 @@ pub fn run() {
     .setup(|app| {
       // запись Cinematic RTX могла оборваться (вылет программы) — вернуть настройки видео CS2
       reshade::restore_video();
+      // и разрешение экрана, если его поднимали для «Мега-качества» (display.rs)
+      display::restore();
       // окно по умолчанию 1400×760 (tauri.conf.json), чтобы справа в шапке влезал живой статус;
       // на экране поменьше ужимаем до рабочей области (без панели задач), но не меньше минимума
       if let Some(w) = tauri::Manager::get_webview_window(app, "main") {

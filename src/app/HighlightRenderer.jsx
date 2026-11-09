@@ -66,6 +66,8 @@ const RESOLUTIONS = [
   { id: "3840x2160", ratio: "16:9", label: "4K",    width: 3840, height: 2160, mbps: 80, crf: 15 },
   { id: "960x720",   ratio: "4:3",  label: "720p",  width: 960,  height: 720,  mbps: 10, crf: 20 },
   { id: "1280x960",  ratio: "4:3",  label: "960p",  width: 1280, height: 960,  mbps: 14, crf: 18 },
+  // растянутый 4:3 под Full HD: после растяжки ровно 1920×1080, пиксель в пиксель
+  { id: "1440x1080", ratio: "4:3",  label: "1080p", width: 1440, height: 1080, mbps: 16, crf: 17 },
   { id: "1600x1200", ratio: "4:3",  label: "1200p", width: 1600, height: 1200, mbps: 18, crf: 17 },
   { id: "1080x1080", ratio: "1:1",  label: "1080p", width: 1080, height: 1080, mbps: 16, crf: 18 },
   { id: "1080x1920", ratio: "9:16", label: "1080p", width: 1080, height: 1920, mbps: 20, crf: 18 },
@@ -120,6 +122,91 @@ const ATMOS = [
 // (камера и модели успевают встать на место); длительность выбирается во вкладке «Звук» (tailSecs)
 const TAIL_DELAY = 64;
 const TAIL_SECS = { min: 2, max: 12, def: 4 };
+
+// Графика записи (вкладка «Эффекты»): как в игре, Кино-графика (ReShade, пресет Cinematic) или
+// Мега-качество (свой пресет без зерна + запись в 2 раза больше, render.rs ULTRA_SS)
+const GFX = [
+  { id: "game", label: "Как в игре", sub: "без обработки · быстрее всего",
+    help: "Игра записывается как есть, без ReShade. Самый быстрый рендер." },
+  { id: "cine", label: "Кино-графика", sub: "тени, отраженный свет, отражения, кино-цвет",
+    help: "Как в пресете Cinematic: игра записывается через ReShade с эффектами по глубине кадра - мягкие тени по углам, цветной свет от стен, отражения на полу и стеклах, свечение и кино-цвет. Ярко и атмосферно, но на стенах бывает зерно. При «Пересобрать без игры» остается как было записано." },
+  { id: "ultra", label: "Мега-качество", sub: "2x разрешение · без зерна и лесенок", badge: "MAX",
+    help: "Самая чистая картинка. Игра пишется в 2 раза больше нужного и при сборке уменьшается: нет лесенок на краях крыш и проводах, текстуры четче, шум усредняется. ReShade - свой пресет без зерна: мягкие тени без «отраженного света», спокойные отражения, контраст без дымки." },
+];
+const gfxOf = (fx) => (fx.rtx ? (fx.ultra ? "ultra" : "cine") : "game");
+
+// Где включается виртуальное разрешение больше экрана — по видеокарте (display.rs ultra_check)
+const VSR_STEPS = {
+  amd: { name: "AMD Virtual Super Resolution (VSR)", steps: [
+    "Открой AMD Software: Adrenalin Edition",
+    "Нажми шестеренку справа вверху",
+    "Вкладка Display",
+    "Включи Virtual Super Resolution",
+  ] },
+  nvidia: { name: "NVIDIA DSR", steps: [
+    "Открой Панель управления NVIDIA",
+    "Управление параметрами 3D → Глобальные параметры",
+    "DSR - степень: отметь 4.00x",
+    "Нажми «Применить»",
+  ] },
+};
+
+// Под карточками графики: что делает выбранный режим. Для «Мега-качества» — проверка системы
+// по шагам: видеокарта, виртуальное разрешение (и как его включить именно на этой карте), что будет при записи
+function GfxInfo({ mode, check, onRecheck, rec, out }) {
+  const g = GFX.find((x) => x.id === mode);
+  if (mode !== "ultra") return <p className="gfx-info gfx-info--plain">{tr(g.help)}</p>;
+  const [rw, rh] = rec, [ow, oh] = out;
+  const vsr = VSR_STEPS[check?.vendor];
+  const ok = check?.fitsNow || !!check?.mode;
+  const st = (s) => <i className={`gfx-step__st gfx-step__st--${s}`} aria-hidden="true" />;
+  return (
+    <div className="gfx-info">
+      <p className="gfx-info__lead">{tr(g.help)}</p>
+      <ol className="gfx-steps">
+        <li className="gfx-step">
+          {st(check?.gpu ? "ok" : "info")}
+          <div><b>{tr("Видеокарта")}</b><span className="dim">{check?.gpu || (check?.busy ? tr("проверяю...") : tr("не определилась"))}</span></div>
+        </li>
+        <li className={`gfx-step ${check && !check.busy && !ok ? "is-bad" : ""}`}>
+          {st(!check || check.busy ? "info" : ok ? "ok" : "bad")}
+          <div>
+            <b>{tr("Разрешение больше экрана")}{vsr && <span className="mono dim"> · {vsr.name}</span>}</b>
+            {!check || check.busy ? (
+              <span className="dim">{tr("проверяю...")}</span>
+            ) : check.fitsNow ? (
+              <span className="dim">{tr("Экран {0}x{1} и так достаточно большой - ничего включать не нужно.", ...check.screen)}</span>
+            ) : check.mode ? (
+              <span className="dim">{tr("Включено. На время записи экран станет {0}x{1}, потом вернется {2}x{3}.", ...check.mode, ...(check.screen || ["?", "?"]))}</span>
+            ) : vsr ? (
+              <>
+                <span>{tr("Не включено - без этого игра запишется в обычном разрешении, и двойного качества не будет. Включи один раз:")}</span>
+                <ol className="gfx-howto">{vsr.steps.map((s) => <li key={s}>{tr(s)}</li>)}</ol>
+                <button type="button" className="chip" onClick={onRecheck}>{tr("Я включил - проверить снова")}</button>
+              </>
+            ) : (
+              <span>{tr("У этой видеокарты нет режимов больше экрана. Мега-качество все равно уберет зерно и дымку, но запись будет в обычном разрешении.")}</span>
+            )}
+          </div>
+        </li>
+        <li className="gfx-step">
+          {st("info")}
+          <div>
+            <b>{tr("Что будет при записи")}</b>
+            <span className="dim">{tr("Игра пишет {0}x{1}, видео выйдет {2}x{3}. Пока идет запись, экран станет мельче и может подтормаживать - это нормально, потом все вернется.", rw, rh, ow, oh)}</span>
+          </div>
+        </li>
+        <li className="gfx-step">
+          {st("info")}
+          <div>
+            <b>{tr("Время и место")}</b>
+            <span className="dim">{tr("Рендер примерно в 3-4 раза дольше обычного: каждый кадр в 4 раза больше. Сырые записи на диске тоже больше.")}</span>
+          </div>
+        </li>
+      </ol>
+    </div>
+  );
+}
 
 const GPU_NAMES ={ h264_nvenc: "NVIDIA NVENC", h264_amf: "AMD AMF", h264_qsv: "Intel Quick Sync" };
 
@@ -554,7 +641,7 @@ export default function HighlightRenderer() {
     try { const v = Number(localStorage.getItem("cf-tail-secs")); return v >= TAIL_SECS.min && v <= TAIL_SECS.max ? v : TAIL_SECS.def; } catch { return TAIL_SECS.def; }
   });
   useEffect(() => { try { localStorage.setItem("cf-tail-secs", String(tailSecs)); } catch { /* только на сессию */ } }, [tailSecs]);
-  const [fx, setFx] = useState({ slowmo: false, damage: false, xray: false, hideDemoUi: true, hud: "full", camVictim: true, replayVoice: false, voiceTail: true, camOrbit: false, killFlash: false, flashColor: "pink", atmo: "", atmoGame: true, hsZoom: false, rtx: false });
+  const [fx, setFx] = useState({ slowmo: false, damage: false, xray: false, hideDemoUi: true, hud: "full", camVictim: true, replayVoice: false, voiceTail: true, camOrbit: false, killFlash: false, flashColor: "pink", atmo: "", atmoGame: true, hsZoom: false, rtx: false, ultra: false });
 
   // ffmpeg: рядом с HLAE его может не быть (установщик HLAE ставит его отдельно, в zip-версии его нет) —
   // тогда программа сама скачивает свою копию (src-tauri/src/ffmpeg.rs). ffReady — путь, когда готов.
@@ -589,6 +676,22 @@ export default function HighlightRenderer() {
 
   const resOptions = useMemo(() => RESOLUTIONS.filter((r) => r.ratio === aspect), [aspect]);
   const res = resOptions.find((r) => r.id === resId) ?? resOptions[0];
+
+  // «Мега-качество»: видеокарта, экран и режим VSR/DSR, в который экран переключится под окно игры
+  // (двойной кадр) — для панели под карточками графики
+  const [ultraCheck, setUltraCheck] = useState(null);
+  const askUltra = useCallback(() => invoke("ultra_check", { width: res.width * 2, height: res.height * 2 }), [res.width, res.height]);
+  // «Я включил - проверить снова»: пока проверяется — «проверяю...»
+  const checkUltra = () => {
+    setUltraCheck((c) => ({ ...c, busy: true }));
+    askUltra().then(setUltraCheck).catch(() => setUltraCheck(null));
+  };
+  useEffect(() => {
+    if (!(fx.rtx && fx.ultra)) return;
+    let alive = true;
+    askUltra().then((c) => alive && setUltraCheck(c)).catch(() => alive && setUltraCheck(null));
+    return () => { alive = false; };
+  }, [fx.rtx, fx.ultra, askUltra]);
 
   // при смене пропорции переключаемся на первое доступное разрешение в ней
   useEffect(() => {
@@ -908,7 +1011,10 @@ const voicePayload = useMemo(() => {
     // кусок эдита: HUD всегда полный (как в TikTok-эдитах), без своих повторов и замедлений —
     // ритм делает монтаж
     const fxJob = o ? { ...fx, slowmo: false, camVictim: false, camOrbit: false, hsZoom: false, killFlash: false, atmo: "", hud: "full", xray: false } : fx;
-    const { width, height, crf } = res;
+    // «Мега-качество» — только у клипов (у эдита своя кино-графика): запись в 2 раза больше, итог чуть качественнее
+    const ultraOn = !o && !!fx.rtx && !!fx.ultra;
+    const { width, height } = res;
+    const crf = ultraOn ? Math.max(12, res.crf - 2) : res.crf;
     // момент клипа и то, что про него знает его демка
     const base = rl
       ? rl.map((e) => ({
@@ -961,7 +1067,7 @@ const voicePayload = useMemo(() => {
       // самый длинный клип: сырьё лежит на диске только у пары клипов сразу, а не у всей записи
       const maxClipSeconds = reuse ? 0 : Math.max(0, ...sel.map((c) => (c.end - c.start) / 64)) * (fxJob.camVictim ? 1.6 : 1);
       const issues = await invoke("preflight", { plan: {
-        out: paths.out, cs2: paths.cs2, hlae: paths.hlae, demo: demoPath0, width, height, recFps, seconds: secs, maxClipSeconds,
+        out: paths.out, cs2: paths.cs2, hlae: paths.hlae, demo: demoPath0, width: ultraOn && !reuse ? width * 2 : width, height: ultraOn && !reuse ? height * 2 : height, ultra: ultraOn && !reuse, recFps, seconds: secs, maxClipSeconds,
         gpu: !!(useGpu && gpuEnc), skins: !reuse && !o && (rl ? reelSkins(rl).length > 0 : !planIsEmpty(skinPlan)),
       } }).catch(() => []);
       const text = (list) => list.map((i) => tr(i.text, ...i.args));
@@ -1160,7 +1266,7 @@ const voicePayload = useMemo(() => {
         clips: sel, fps, blur, fov, width, height, crf, vmFov: vm.fov, vmX: vm.x, vmY: vm.y, vmZ: vm.z,
         voiceIndices: voicePayload.indices, voiceIndicesHigh: voicePayload.indicesHigh,
         gpuEncoder: useGpu && gpuEnc ? gpuEnc : null, ...fxJob, stamp, startKey, stretch: stretch && aspect === "4:3", merge: o ? false : merge.on, keepParts: merge.keep,
-        partsDir: o?.partsDir ?? null, reshade: o ? !!o.reshade : !reuse && !!fx.rtx,
+        partsDir: o?.partsDir ?? null, reshade: o ? !!o.reshade : !reuse && !!fx.rtx, ultra: ultraOn,
         music: withMusic ? {
           path: music.path, offset: music.start, musicVol: music.musicVol, gameVol: music.gameVol,
           beatFx: music.beatFx ? music.beatMode || "zoom" : null, beatAmount: music.beatAmount ?? 1,
@@ -1188,7 +1294,7 @@ const voicePayload = useMemo(() => {
   const skinCount = Object.keys(skinPlan.weapons || {}).length + (skinPlan.knife ? 1 : 0) + (skinPlan.gloves ? 1 : 0);
   const studioSummary = {
     video: `${res.label} · ${aspect} · ${fps} fps${blur ? " · blur" : ""}`,
-    effects: onList([[fx.rtx, tr("кино-графика")], [fx.slowmo, "slow-mo"], [fx.damage, tr("урон")], [fx.killFlash, tr("вспышка")], [fx.hsZoom, tr("зум на HS")], [!!fx.atmo, tr(ATMOS.find((a) => a.id === fx.atmo)?.label ?? "").toLowerCase()], [fx.xray, "x-ray"], [fx.hud !== "full", fx.hud === "match" ? tr("HUD матча") : tr("килфид")]], tr("без эффектов")),
+    effects: onList([[fx.rtx && !fx.ultra, tr("кино-графика")], [fx.rtx && fx.ultra, tr("мега-качество")], [fx.slowmo, "slow-mo"], [fx.damage, tr("урон")], [fx.killFlash, tr("вспышка")], [fx.hsZoom, tr("зум на HS")], [!!fx.atmo, tr(ATMOS.find((a) => a.id === fx.atmo)?.label ?? "").toLowerCase()], [fx.xray, "x-ray"], [fx.hud !== "full", fx.hud === "match" ? tr("HUD матча") : tr("килфид")]], tr("без эффектов")),
     camera: onList([[fx.camVictim, tr("повтор")], [fx.camOrbit, tr("облет")]], tr("обычная")),
     sound: onList([[voice !== "none", tr("голоса: {0}", tr(VOICE_MODES.find(([k]) => k === voice)?.[1] ?? "").toLowerCase())], [music.enabled && music.path, tr("трек")], [music.enabled && music.path && music.beatFx, tr("в такт")]], tr("звук игры")),
     skins: skinCount ? tr("изменено: {0}", skinCount) : tr("как в демке"),
@@ -1283,10 +1389,28 @@ const voicePayload = useMemo(() => {
 
         {st === "effects" && (
           <>
+            <span className="mono dim sub">{tr("графика")}<Hint text={tr("Как будет выглядеть сама игра в записи. Кино-графика и Мега-качество пишут через ReShade: он скачается при первом рендере (~10 МБ), MSAA в CS2 на время записи выключается и потом возвращается.")} /></span>
+            <div className="gfx" role="radiogroup" aria-label={tr("Графика")}>
+              {GFX.map((g) => {
+                const on = gfxOf(fx) === g.id;
+                return (
+                  <button key={g.id} type="button" role="radio" aria-checked={on}
+                    className={`gfx-card gfx-card--${g.id} ${on ? "is-on" : ""}`}
+                    onClick={() => setFx({ ...fx, rtx: g.id !== "game", ultra: g.id === "ultra" })}>
+                    <span className="gfx-card__pv" aria-hidden="true"><i /><i /><i /></span>
+                    <span className="gfx-card__text">
+                      <b>{tr(g.label)}{g.badge && <em className="gfx-card__badge mono">{g.badge}</em>}</b>
+                      <span className="dim">{tr(g.sub)}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <GfxInfo mode={gfxOf(fx)} check={ultraCheck} onRecheck={checkUltra}
+              rec={[res.width * 2, res.height * 2]}
+              out={[stretch && aspect === "4:3" ? Math.round((res.height * 16) / 9 / 2) * 2 : res.width, res.height]} />
+            <hr className="sep" />
             <div className="toggles">
-              <Toggle label={tr("Кино-графика")} hint={tr("ReShade: тени, отраженный свет, отражения, кино-цвет")}
-                checked={fx.rtx} onChange={(v) => setFx({ ...fx, rtx: v })}
-                help={tr("Как в пресете Cinematic: игра записывается через ReShade с эффектами по глубине кадра - мягкие тени по углам, цветной свет от стен, отражения на полу и стеклах, свечение и кино-цвет. ReShade скачается при первом рендере (~10 МБ). MSAA в CS2 на время записи выключается и потом возвращается. При «Пересобрать без игры» остается как было записано.")} />
               <Toggle label={tr("Slow-motion на фрагах")} hint={tr("Разгон → замедление → разгон вокруг каждого килла")}
                 checked={fx.slowmo} onChange={(v) => setFx({ ...fx, slowmo: v })}
                 help={tr("Вокруг каждого килла видео плавно замедляется примерно в 3 раза и снова разгоняется. Звук замедляется вместе с картинкой.")}

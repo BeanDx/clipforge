@@ -184,7 +184,15 @@ pub struct Job {
     // пресет Cinematic RTX: запись через ReShade с аддоном HLAE (reshade.rs)
     #[serde(default)]
     reshade: bool,
+    // «Мега-качество»: свой пресет ReShade без зерна (reshade.rs, ULTRA), запись в 2 раза больше
+    // (окно игры без рамки — обычное окно Windows не бывает больше экрана) и при сборке —
+    // уменьшение lanczos, мягкое шумоподавление и резкость уже на итоговом размере
+    #[serde(default)]
+    ultra: bool,
 }
+
+// во сколько раз больше пишется кадр при «Мега-качестве»
+const ULTRA_SS: u32 = 2;
 fn yes() -> bool { true }
 
 // Переход между клипами в ролике, секунды (тот же REEL_XFADE во фронтенде — на него сдвинут трек)
@@ -199,6 +207,20 @@ fn media_duration(ff: &Path, path: &Path) -> Option<f64> {
     let log = String::from_utf8_lossy(&out.stderr);
     let t = log.split("Duration: ").nth(1)?.split(',').next()?;
     Some(t.trim().split(':').filter_map(|x| x.parse::<f64>().ok()).fold(0.0, |acc, x| acc * 60.0 + x))
+}
+
+// Размер кадра видео по выводу ffmpeg («Video: h264 ..., 3840x2160 [SAR ...]»)
+fn media_size(ff: &Path, path: &Path) -> Option<(u32, u32)> {
+    let mut cmd = Command::new(ff);
+    cmd.arg("-hide_banner").arg("-i").arg(path);
+    no_window(&mut cmd);
+    let out = cmd.output().ok()?;
+    let log = String::from_utf8_lossy(&out.stderr);
+    let line = log.lines().find(|l| l.contains("Video:"))?;
+    line.split(|c: char| c == ',' || c == ' ').find_map(|w| {
+        let (a, b) = w.split_once('x')?;
+        Some((a.parse().ok()?, b.parse().ok()?))
+    })
 }
 
 // Ролик из клипов с коротким переходом «рывок вбок» (xfade smoothleft) и перекрёстным звуком.
@@ -589,11 +611,20 @@ fn has_rubberband(ff: &Path) -> bool {
 
 // Граф фильтров пост-обработки: блюр → цифры урона → slow-mo → целевой fps. Выходы [v] и [a].
 // hud — номер входа ffmpeg с кадрами HUD (ffconcat из PNG с прозрачностью), если он есть.
-fn post_filter(j: &Job, cl: &Clip, has_audio: bool, rubberband: bool, hud: Option<usize>) -> String {
+// big — запись больше итогового кадра («Мега-качество», в том числе при пересборке без игры)
+fn post_filter(j: &Job, cl: &Clip, has_audio: bool, rubberband: bool, hud: Option<usize>, big: bool) -> String {
     let at = |tick: u32| (tick as f64 - cl.start as f64) / TICKRATE;
     // Блюр до HUD, чтобы цифры HUD не размазывались; HUD до slow-mo, чтобы он замедлялся вместе с видео
     let (mut head, mut cur) = (String::new(), "0:v");
-    if j.blur { head += "[0:v]tmix=frames=3[vb];"; cur = "vb"; }
+    // «Мега-качество»: кадр записан в ULTRA_SS раз больше — уменьшение lanczos убирает лесенки и
+    // усредняет шум экранных эффектов, лёгкий hqdn3d снимает остаток зерна (временная часть мягкая,
+    // чтобы не было шлейфов), резкость — уже на итоговом размере
+    if j.ultra || big {
+        let clean = if j.ultra { ",hqdn3d=1.2:1.2:2.5:2.5,unsharp=5:5:0.45:5:5:0" } else { "" };
+        head += &format!("[0:v]scale={}:{}:flags=lanczos{clean}[vu];", j.width, j.height);
+        cur = "vu";
+    }
+    if j.blur { head += &format!("[{cur}]tmix=frames=3[vb];"); cur = "vb"; }
     // атмосфера — до своего HUD, чтобы его цифры оставались чистыми
     if let Some(gr) = atmo_grade(&j.atmo) { head += &format!("[{cur}]{gr}[vg];"); cur = "vg"; }
     if let Some(idx) = hud {
@@ -1195,7 +1226,9 @@ fn finish_take(j: &Job, ff: &Path, d: &Path, clip: &Clip, dst: &Path, hud_dir: O
     let mus_idx = take(music.is_some());
 
     // Граф передаём строкой: -filter_complex_script убрали в ffmpeg 8, а длина графа далека от лимита командной строки
-    let mut filter = post_filter(j, clip, has_audio, has_rubberband(ff), hud_idx);
+    // запись крупнее итогового кадра (была с «Мега-качеством») — сначала уменьшаем
+    let big = media_size(ff, &v).is_some_and(|(w, _)| w > j.width + 16);
+    let mut filter = post_filter(j, clip, has_audio, has_rubberband(ff), hud_idx, big);
     let (mut vout, mut aout) = ("[v]", has_audio.then_some("[a]"));
     // Текст песни и трек — уже на итоговой шкале времени (после slow-mo): музыка не замедляется
     if let Some(m) = mul_idx {
@@ -1395,9 +1428,12 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
     }
 
     let hlae_dir = Path::new(&job.hlae).parent().ok_or("неверный путь к HLAE")?.to_path_buf();
+    // «Мега-качество»: окно в ULTRA_SS раз больше. Больше экрана окно не бывает — экран на время
+    // записи переключается в режим побольше (display.rs, нужен AMD VSR / NVIDIA DSR)
+    let ss = if job.ultra { ULTRA_SS } else { 1 };
     let cmdline = format!(
         "-steam -insecure -novid -console -condebug -windowed -width {} -height {} +playdemo \"{}\" +exec clipforge",
-        job.width, job.height, job.demo.replace('\\', "/")
+        job.width * ss, job.height * ss, job.demo.replace('\\', "/")
     );
     let total = job.clips.len();
     // У HLAE хук для CS2 лежит в подпапке x64 (в корне только 32-битный хук для CS:GO)
@@ -1405,7 +1441,12 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
     if !dll.exists() { dll = hlae_dir.join("AfxHookSource2.dll"); }
     if !dll.exists() { return Err(format!("не найден AfxHookSource2.dll рядом с HLAE: {}", hlae_dir.display())); }
     // Cinematic RTX: ReShade подгружается вторым DLL после хука HLAE, только на этот запуск игры
-    let reshade_dll = if job.reshade && !reuse { Some(crate::reshade::prepare()?) } else { None };
+    let reshade_dll = if job.reshade && !reuse { Some(crate::reshade::prepare(job.ultra)?) } else { None };
+    if job.ultra && !reuse {
+        if let Err(e) = crate::display::raise_for(job.width * ss, job.height * ss) {
+            let _ = app.emit("render-warning", format!("Мега-качество без двойного разрешения: {e}. Включи AMD VSR (Adrenalin → шестеренка → Display → Virtual Super Resolution) или NVIDIA DSR"));
+        }
+    }
 
     thread::spawn(move || {
         // при пересборке игра не нужна: take-папки уже лежат во временной папке
@@ -1418,7 +1459,7 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
             match cmd.arg("-programPath").arg(&job.cs2).arg("-cmdLine").arg(&cmdline).spawn() {
                 Ok(c) => Some(c),
                 Err(_) => {
-                    crate::reshade::restore_video();
+                    crate::reshade::restore_video(); crate::display::restore();
                     let _ = app.emit("render-error", "не удалось запустить HLAE");
                     return;
                 }
@@ -1435,6 +1476,8 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
         let mut handled: HashSet<PathBuf> = HashSet::new();
         let mut sizes: HashMap<PathBuf, (u64, u32)> = HashMap::new();
         let mut made = 0;
+        // «Мега-качество»: какой ширины кадр реально записала игра (окно могло не стать больше экрана)
+        let mut ultra_got: Option<u32> = None;
         let mut done_clips: Vec<crate::toast::ToastClip> = Vec::new();
         // к каждому готовому клипу: (группа кусков, раунд, киллов) — для склейки кусков одного момента
         let mut done_info: Vec<(Option<u32>, u32, usize)> = Vec::new();
@@ -1483,7 +1526,7 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
                 // игру запускал рендер — закрываем её вместе с ним (при пересборке игры нет)
                 if let Some(c) = child.as_mut() { let _ = c.kill(); }
                 ov_stop.store(true, Ordering::SeqCst);
-                if !reuse { kill_cs2(); crate::reshade::restore_video(); }
+                if !reuse { kill_cs2(); crate::reshade::restore_video(); crate::display::restore(); }
                 let _ = app.emit("render-error", "рендер остановлен");
                 return;
             }
@@ -1529,6 +1572,9 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
                 let lyr_dir = work.join(format!("lyr_{i}"));
                 let done_before = handled.len() - 1;
                 let on_progress = |f: f64| emit(rec, (done_before as f64 + f) / total as f64);
+                if job.ultra && ultra_got.is_none() {
+                    ultra_got = media_size(&ff, &d.join("video.mp4")).map(|(w, _)| w);
+                }
                 if finish_take(&job, &ff, d, &clip, &dst, hud, Some(lyr_dir.as_path()), &on_progress) {
                     made += 1;
                     done_clips.push(crate::toast::ToastClip {
@@ -1571,7 +1617,7 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
         // уже дописаны (перестали расти) и обработаны.
         ov_stop.store(true, Ordering::SeqCst);
         // игра закрыта — настройки видео, которые меняла запись Cinematic (MSAA), возвращаются
-        if !reuse { kill_cs2(); crate::reshade::restore_video(); }
+        if !reuse { kill_cs2(); crate::reshade::restore_video(); crate::display::restore(); }
         // Копия демки со скинами (игра закрыта — файл уже не занят)
         let _ = fs::remove_file(work.join("skins.dem"));
         // Удаляются только если опустели (remove_dir не трогает непустые папки)
@@ -1664,6 +1710,13 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
         let _ = app.emit("render-done", out.to_string_lossy().to_string());
         // после render-done: он сам ошибку не сбрасывает, и предупреждение остаётся видно
         if let Some(msg) = &crash_msg { let _ = app.emit("render-warning", msg.clone()); }
+        // окно игры не стало больше экрана — клипы собраны, но без запаса разрешения
+        if let Some(w) = ultra_got.filter(|&w| w + 16 < job.width * ULTRA_SS) {
+            let _ = app.emit("render-warning", format!(
+                "Мега-качество: игра записала кадр шириной {w} вместо {} - окно не стало больше экрана. Клипы готовы, но без двойного разрешения. Включи AMD VSR (Adrenalin → шестеренка → Display → Virtual Super Resolution) или NVIDIA DSR",
+                job.width * ULTRA_SS
+            ));
+        }
         // уведомление в углу экрана: ты мог свернуть игру и уйти — клипы готовы
         crate::toast::show(&app, crate::toast::ToastData { clips: done_clips, hlae: job.hlae.clone(), out: job.out.clone(), note: None });
     });
@@ -1739,6 +1792,19 @@ mod replay_voice_tests {
         assert!(c.contains("mirv_cmd addAtTick 2000 \"exec cf_0_tail\"\n"));
         assert!(!file(&files, "cf_0_tail").contains("tail_on"));
         assert!(file(&files, "cf_0_e").contains("exec cf_0_rest\n"));
+    }
+
+    #[test]
+    fn ultra_downscales_first_and_cleans() {
+        let mut j = job(false);
+        let g = post_filter(&j, &j.clips[0], true, false, None, false);
+        assert!(!g.contains("lanczos"));
+        j.ultra = true;
+        j.blur = true;
+        let g = post_filter(&j, &j.clips[0], true, false, None, false);
+        // сначала уменьшение до итогового размера, блюр уже по уменьшенному кадру
+        assert!(g.starts_with("[0:v]scale=1280:960:flags=lanczos,hqdn3d"));
+        assert!(g.contains("[vu]tmix=frames=3[vb]"));
     }
 
     #[test]

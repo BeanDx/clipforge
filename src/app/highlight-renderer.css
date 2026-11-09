@@ -1669,3 +1669,81 @@
 
 .hm-chip--btn { cursor: pointer; transition: border-color .15s, background-color .15s; }
 .hm-chip--btn:hover { border-color: var(--yellow); background: rgba(245,197,24,.08); }
+
+/* === Графика записи: Как в игре / Кино-графика / Мега-качество (вкладка «Эффекты») === */
+.gfx { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 900px) { .gfx { grid-template-columns: 1fr; } }
+.gfx-card {
+  position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 10px;
+  padding: 10px; text-align: left; border: 1px solid var(--line-hi); background: var(--panel);
+  transition: border-color .18s, box-shadow .18s, transform .18s var(--ease);
+}
+.gfx-card:hover { border-color: var(--teal); transform: translateY(-2px); }
+.gfx-card.is-on { border-color: var(--yellow); box-shadow: 0 0 0 1px var(--yellow), 0 8px 26px rgba(245,197,24,.12); }
+.gfx-card--ultra.is-on { border-color: var(--teal); box-shadow: 0 0 0 1px var(--teal), 0 8px 26px rgba(46,230,192,.16); }
+.gfx-card__text { display: flex; flex-direction: column; gap: 3px; }
+.gfx-card__text b { display: flex; align-items: center; gap: 8px; font-size: 1.05rem; }
+.gfx-card__text .dim { font-size: .82rem; line-height: 1.25; }
+.gfx-card__badge {
+  font-style: normal; font-size: .6rem; font-weight: 700; letter-spacing: .1em; padding: 1px 6px;
+  color: #07090d; background: linear-gradient(90deg, var(--teal), #8fe07a);
+}
+
+/* превью: небо, стена, пол — разница режимов видна сразу */
+.gfx-card__pv { position: relative; display: block; height: 64px; overflow: hidden; border: 1px solid var(--line); }
+.gfx-card__pv i { position: absolute; display: block; }
+.gfx-card__pv i:nth-child(1) { inset: 0 0 45% 0; }                 /* небо */
+.gfx-card__pv i:nth-child(2) { left: 8%; width: 46%; top: 18%; bottom: 30%; } /* стена */
+.gfx-card__pv i:nth-child(3) { inset: 70% 0 0 0; }                 /* пол */
+
+.gfx-card--game .gfx-card__pv i:nth-child(1) { background: #a9bccb; }
+.gfx-card--game .gfx-card__pv i:nth-child(2) { background: #b49a72; }
+.gfx-card--game .gfx-card__pv i:nth-child(3) { background: #8c7c66; }
+.gfx-card--game .gfx-card__pv { background: #a9bccb; }
+
+/* кино: тёпло, свечение, дымка и лёгкое зерно */
+.gfx-card--cine .gfx-card__pv { background: #e7cfa6; filter: contrast(.9) saturate(1.1); }
+.gfx-card--cine .gfx-card__pv i:nth-child(1) { background: linear-gradient(#f3dcb4, #f7e6c6); }
+.gfx-card--cine .gfx-card__pv i:nth-child(2) {
+  background: radial-gradient(rgba(60,40,20,.35) 1px, transparent 1.2px) 0 0 / 4px 4px, linear-gradient(#d9a868, #b9844a);
+  box-shadow: 0 0 18px rgba(255,210,140,.7);
+}
+.gfx-card--cine .gfx-card__pv i:nth-child(3) { background: linear-gradient(#a7835a, #6f5538); }
+.gfx-card--cine .gfx-card__pv::after { content: ""; position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 40%, transparent 40%, rgba(40,20,0,.35)); }
+
+/* мега: чисто, контрастно, глубокие тени, отражение на полу */
+.gfx-card--ultra .gfx-card__pv { background: #5f9ad6; }
+.gfx-card--ultra .gfx-card__pv i:nth-child(1) { background: linear-gradient(#3f7fc8, #9cc6ec); }
+.gfx-card--ultra .gfx-card__pv i:nth-child(2) {
+  background: linear-gradient(90deg, #e2b26a 0 70%, #8a5f2c 70%);
+  box-shadow: inset 0 -6px 0 rgba(0,0,0,.25), 4px 4px 0 rgba(0,0,0,.35);
+}
+.gfx-card--ultra .gfx-card__pv i:nth-child(3) {
+  background: linear-gradient(#4a3a28, #2a2016);
+  -webkit-mask: none;
+}
+.gfx-card--ultra .gfx-card__pv::after {
+  content: ""; position: absolute; left: 8%; width: 46%; top: 70%; height: 22%;
+  background: linear-gradient(rgba(226,178,106,.45), transparent);
+}
+
+/* под карточками: что делает выбранный режим; у «Мега-качества» — проверка системы по шагам */
+.gfx-info { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; border: 1px solid var(--line); background: rgba(255,255,255,.015); }
+.gfx-info--plain { margin: 0; color: var(--dim); font-size: .9rem; line-height: 1.4; }
+.gfx-info__lead { margin: 0; color: var(--text); font-size: .92rem; line-height: 1.4; }
+.gfx-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.gfx-step { display: flex; gap: 12px; align-items: flex-start; }
+.gfx-step > div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.gfx-step b { font-size: .95rem; }
+.gfx-step .dim, .gfx-step > div > span { font-size: .86rem; line-height: 1.4; }
+.gfx-step.is-bad { padding: 10px 12px; margin: 0 -12px; border-left: 2px solid var(--red); background: rgba(229,72,77,.06); }
+.gfx-step__st { flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: 50%; display: grid; place-items: center; font: 700 .7rem var(--mono); font-style: normal; }
+.gfx-step__st--ok { background: var(--teal); color: #07090d; }
+.gfx-step__st--ok::before { content: "✓"; }
+.gfx-step__st--bad { background: var(--red); color: #fff; }
+.gfx-step__st--bad::before { content: "!"; }
+.gfx-step__st--info { border: 1px solid var(--line-hi); color: var(--dim); }
+.gfx-step__st--info::before { content: "i"; }
+.gfx-howto { margin: 4px 0 6px; padding-left: 20px; display: flex; flex-direction: column; gap: 3px; font-size: .88rem; color: var(--text); }
+.gfx-howto li::marker { color: var(--teal); font-family: var(--mono); }
+.gfx-step .chip { align-self: flex-start; color: var(--teal); border-color: rgba(46,230,192,.5); }

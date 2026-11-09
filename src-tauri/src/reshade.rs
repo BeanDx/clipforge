@@ -147,20 +147,22 @@ fn install(app: &AppHandle) -> Result<(), String> {
 
 // ReShade.ini: шейдеры и пресет из своей папки, глубина — от аддона HLAE (встроенный Generic Depth
 // выключен), значения глубины — как в вики ReShade_advancedfx. Оверлей ReShade ничего не рисует.
-fn write_config() -> Result<(), String> {
+fn write_config(ultra: bool) -> Result<(), String> {
     let dir = own_dir();
     let d = dir.to_string_lossy();
+    let preset = if ultra { "clipforge_ultra.ini" } else { "clipforge_cinematic.ini" };
     let ini = format!(
         "[ADDON]\r\nDisabledAddons=Generic Depth\r\n\r\n\
          [GENERAL]\r\nEffectSearchPaths={d}\\reshade-shaders\\Shaders\\**\r\nTextureSearchPaths={d}\\reshade-shaders\\Textures\\**\r\n\
-         IntermediateCachePath={d}\\cache\r\nPresetPath={d}\\clipforge_cinematic.ini\r\n\
+         IntermediateCachePath={d}\\cache\r\nPresetPath={d}\\{preset}\r\n\
          PerformanceMode=1\r\nSkipLoadingDisabledEffects=1\r\nNoReloadOnInit=0\r\n\
          PreprocessorDefinitions=RESHADE_DEPTH_INPUT_IS_REVERSED=0,RESHADE_DEPTH_LINEARIZATION_FAR_PLANE=255,RESHADE_DEPTH_INPUT_IS_UPSIDE_DOWN=0,RESHADE_DEPTH_INPUT_IS_LOGARITHMIC=0\r\n\r\n\
          [OVERLAY]\r\nTutorialProgress=4\r\nShowFPS=0\r\nShowClock=0\r\nShowFrameTime=0\r\nShowPresetName=0\r\nShowPresetTransitionMessage=0\r\nShowScreenshotMessage=0\r\n"
     );
     fs::create_dir_all(dir.join("cache")).map_err(|e| e.to_string())?;
     fs::write(dir.join("ReShade.ini"), ini).map_err(|e| e.to_string())?;
-    fs::write(dir.join("clipforge_cinematic.ini"), PRESET.replace('\n', "\r\n")).map_err(|e| e.to_string())
+    fs::write(dir.join("clipforge_cinematic.ini"), PRESET.replace('\n', "\r\n")).map_err(|e| e.to_string())?;
+    fs::write(dir.join("clipforge_ultra.ini"), ULTRA.replace('\n', "\r\n")).map_err(|e| e.to_string())
 }
 
 // «Кино»: мягкие тени по углам и цветной отражённый свет от стен (как глобальное освещение RTX),
@@ -238,6 +240,76 @@ DEPTH_MASK_ENABLE=1
 RMS_MASK_ENABLE=1
 ";
 
+// «Мега-качество»: то же, но без зерна и дымки. Без непрямого света (MXAO IL — главный источник
+// крапинок на стенах), только мягкие тени по углам; отражения слабее и без дрожания лучей, с более
+// широким сглаживанием; свечение — едва заметное, только на ярком; цвет — контраст и глубокие тени
+// без высветления неба. Резкости здесь нет: её даёт сборка уже после уменьшения кадра (render.rs).
+const ULTRA: &str = "\
+Techniques=MXAO@qUINT_mxao.fx,SSR@qUINT_ssr.fx,Bloom@qUINT_bloom.fx,Lightroom@qUINT_lightroom.fx
+TechniqueSorting=MXAO@qUINT_mxao.fx,SSR@qUINT_ssr.fx,Bloom@qUINT_bloom.fx,Lightroom@qUINT_lightroom.fx
+
+[qUINT_mxao.fx]
+PreprocessorDefinitions=MXAO_ENABLE_IL=0,MXAO_SMOOTHNORMALS=1
+MXAO_GLOBAL_SAMPLE_QUALITY_PRESET=4
+MXAO_SAMPLE_RADIUS=2.5
+MXAO_GLOBAL_RENDER_SCALE=1.0
+MXAO_SSAO_AMOUNT=1.0
+MXAO_BLEND_TYPE=0
+MXAO_FADE_DEPTH_START=0.1
+MXAO_FADE_DEPTH_END=0.5
+
+[qUINT_ssr.fx]
+SSR_FIELD_OF_VIEW=60.0
+SSR_REFLECTION_INTENSITY=0.45
+SSR_FRESNEL_EXP=5.0
+SSR_FADE_DIST=0.5
+SSR_RAY_INC=1.6
+SSR_ACCEPT_RANGE=2.0
+SSR_JITTER_AMOUNT=0.0
+SSR_FILTER_SIZE=1.6
+SSR_RELIEF_AMOUNT=0.0
+SSR_RELIEF_SCALE=0.35
+
+[qUINT_bloom.fx]
+BLOOM_INTENSITY=0.35
+BLOOM_CURVE=3.0
+BLOOM_SAT=1.0
+BLOOM_DIRT=0.0
+BLOOM_LAYER_MULT_1=0.05
+BLOOM_LAYER_MULT_2=0.05
+BLOOM_LAYER_MULT_3=0.08
+BLOOM_LAYER_MULT_4=0.12
+BLOOM_LAYER_MULT_5=0.2
+BLOOM_LAYER_MULT_6=0.1
+BLOOM_LAYER_MULT_7=0.03
+BLOOM_ADAPT_STRENGTH=0.2
+BLOOM_ADAPT_EXPOSURE=0.0
+BLOOM_ADAPT_SPEED=2.0
+BLOOM_ADAPT_MODE=0
+BLOOM_TONEMAP_COMPRESSION=4.0
+
+[qUINT_lightroom.fx]
+LIGHTROOM_GLOBAL_EXPOSURE=0.0
+LIGHTROOM_GLOBAL_GAMMA=0.0
+LIGHTROOM_GLOBAL_BLACKS_CURVE=-0.14
+LIGHTROOM_GLOBAL_SHADOWS_CURVE=-0.1
+LIGHTROOM_GLOBAL_MIDTONES_CURVE=0.0
+LIGHTROOM_GLOBAL_HIGHLIGHTS_CURVE=-0.06
+LIGHTROOM_GLOBAL_WHITES_CURVE=0.0
+LIGHTROOM_GLOBAL_CONTRAST=0.24
+LIGHTROOM_GLOBAL_SATURATION=0.0
+LIGHTROOM_GLOBAL_VIBRANCE=0.2
+LIGHTROOM_GLOBAL_TEMPERATURE=0.04
+LIGHTROOM_GLOBAL_TINT=0.0
+LIGHTROOM_ENABLE_VIGNETTE=1
+LIGHTROOM_VIGNETTE_SHOW_RADII=0
+LIGHTROOM_VIGNETTE_OFFS=0.0,0.0
+LIGHTROOM_VIGNETTE_RADIUS_INNER=0.4
+LIGHTROOM_VIGNETTE_RADIUS_OUTER=1.4
+LIGHTROOM_VIGNETTE_AMOUNT=0.25
+LIGHTROOM_VIGNETTE_CURVE=1.5
+";
+
 // ---- MSAA: аддону HLAE нужна глубина без сглаживания MSAA (вики ReShade_advancedfx) ----
 // На время записи в cs2_video.txt всех аккаунтов MSAA выключается (вместо него — CMAA2),
 // старый файл лежит рядом (.clipforge) и возвращается после записи или при следующем запуске программы.
@@ -291,9 +363,9 @@ pub fn restore_video() {
 }
 
 // перед запуском игры: всё на месте, настройки записаны, MSAA выключен
-pub fn prepare() -> Result<PathBuf, String> {
+pub fn prepare(ultra: bool) -> Result<PathBuf, String> {
     if !ready() { return Err("ReShade для пресета Cinematic еще не скачан".into()); }
-    write_config()?;
+    write_config(ultra)?;
     msaa_off();
     Ok(dll())
 }

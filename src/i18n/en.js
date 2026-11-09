@@ -1089,4 +1089,15 @@ export default {
   "Сколько на спавне": "Time at spawn",
   "Длина облета от третьего лица на спавне. Не дольше фризтайма: если раунд начнется раньше, кусок закончится на старте раунда.": "Length of the third-person orbit at spawn. Never longer than freeze time: if the round starts earlier, the shot ends when it starts.",
   " с": " s",
-};
+  "графика": "graphics",
+  "Графика": "Graphics",
+  "мега-качество": "max quality",
+  "Как будет выглядеть сама игра в записи. Кино-графика и Мега-качество пишут через ReShade: он скачается при первом рендере (~10 МБ), MSAA в CS2 на время записи выключается и потом возвращается.": "How the game itself looks in the recording. Cinematic and Max quality record through ReShade: it downloads on the first render (~10 MB), and MSAA in CS2 is turned off while recording and restored afterwards.",
+  "без обработки · быстрее всего": "no processing · fastest",
+  "Игра записывается как есть, без ReShade. Самый быстрый рендер.": "The game is recorded as is, without ReShade. Fastest render.",
+  "тени, отраженный свет, отражения, кино-цвет": "shadows, bounce light, reflections, film color",
+  "Как в пресете Cinematic: игра записывается через ReShade с эффектами по глубине кадра - мягкие тени по углам, цветной свет от стен, отражения на полу и стеклах, свечение и кино-цвет. Ярко и атмосферно, но на стенах бывает зерно. При «Пересобрать без игры» остается как было записано.": "Like the Cinematic preset: the game is recorded through ReShade with depth-based effects - soft corner shadows, colored bounce light from walls, reflections on floors and glass, glow and film color. Vivid and moody, but walls can look grainy. \"Rebuild without the game\" keeps it as recorded.",
+  "Мега-качество": "Max quality",
+  "2x разрешение · без зерна и лесенок": "2x resolution · no grain or jaggies",
+  "Самая чистая картинка. Игра пишется в 2 раза больше нужного и при сборке уменьшается: нет лесенок на краях крыш и проводах, текстуры четче, шум усредняется. ReShade - свой пресет без зерна: мягкие тени без «отраженного света», спокойные отражения, контраст без дымки.": "The cleanest picture. The game is recorded at twice the needed size and scaled down when building: no jaggies on roof edges and wires, sharper textures, noise averages out. ReShade uses its own grain-free preset: soft shadows without \"bounce light\", calm reflections, contrast without haze.",
+  };
