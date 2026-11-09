@@ -1,0 +1,86 @@
+/* окно 3D-превью момента */
+.s3d {
+  position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 20px;
+  background: rgba(3,5,8,.78); backdrop-filter: blur(3px); animation: sk-fade .15s ease-out;
+}
+.s3d__box {
+  width: min(1280px, 100%); height: min(860px, calc(100vh - 40px)); display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--line-hi); box-shadow: 0 24px 60px rgba(0,0,0,.6);
+  animation: tab-in .22s cubic-bezier(.2,.7,.3,1);
+}
+.s3d__head { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.s3d__head h3 { margin: 0; font-size: 1.05rem; color: var(--yellow); letter-spacing: .04em; white-space: nowrap; }
+.s3d__head .ratios button { padding: 6px 10px; font-size: .78rem; white-space: nowrap; }
+.s3d__view { position: relative; flex: 1; min-height: 0; background: #0b1016; overflow: hidden; }
+.s3d__view canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.s3d__wait {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  background: #0b1016; color: var(--teal); font-size: .85rem; text-align: center; padding: 24px;
+}
+.s3d__err { color: #ff7b7b; max-width: 560px; line-height: 1.45; }
+.s3d__spin {
+  width: 34px; height: 34px; border: 2px solid var(--line-hi); border-top-color: var(--teal); border-radius: 50%;
+  animation: s3d-spin .8s linear infinite;
+}
+@keyframes s3d-spin { to { transform: rotate(360deg); } }
+.s3d__hint {
+  position: absolute; left: 12px; bottom: 10px; padding: 4px 8px; font-size: .72rem;
+  background: rgba(7,9,13,.7); border: 1px solid var(--line); pointer-events: none;
+}
+.s3d__bar { display: flex; align-items: center; gap: 14px; padding: 10px 14px; border-top: 1px solid var(--line); }
+.s3d__bar .ratios button { padding: 4px 9px; font-size: .75rem; }
+.s3d__play {
+  width: 38px; height: 32px; flex: none; color: var(--teal); border: 1px solid var(--line-hi); font-size: .85rem;
+}
+.s3d__play:hover:not(:disabled) { border-color: var(--teal); }
+.s3d__track { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
+.s3d__track input { width: 100%; accent-color: var(--teal); }
+.s3d__kill {
+  position: absolute; top: -6px; width: 2px; height: 8px; margin-left: -1px; background: #ff5d5d; pointer-events: none;
+}
+.s3d__time { white-space: nowrap; font-size: .78rem; }
+.s3d__note { margin: 0; padding: 0 14px 10px; font-size: .72rem; }
+
+/* прицел в виде из глаз — как стандартный в CS2: четыре штриха с зазором и тёмной обводкой */
+.s3d__cross { display: none; position: absolute; left: 50%; top: 50%; width: 24px; height: 24px; margin: -12px 0 0 -12px; pointer-events: none; z-index: 2; }
+.s3d__view[data-view="pov"] .s3d__cross { display: block; }
+/* выстрел: прицел разлетается и возвращается (--kick ставит engine.js) */
+.s3d__cross path { transform-origin: 12px 12px; }
+.s3d__cross path:first-child, .s3d__cross path:last-child { transform: scale(calc(1 + var(--kick, 0) * .55)); }
+
+/* киллфид — как в игре: справа сверху, тёмные плашки, свои фраги в красной рамке */
+.s3d-kf {
+  position: absolute; top: 12px; right: 12px; z-index: 3; margin: 0; padding: 0; list-style: none;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 4px; pointer-events: none;
+  font-family: "Stratum2", "Rajdhani", system-ui, sans-serif; font-weight: 700; font-size: 15px; letter-spacing: .01em;
+}
+.s3d-kf__row {
+  display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px;
+  background: rgba(0,0,0,.62); border: 2px solid transparent; border-radius: 3px;
+  animation: s3d-kf-in .18s ease-out;
+}
+.s3d-kf__row.is-mine { border-color: #e2302b; background: rgba(40,0,0,.55); }
+.s3d-kf__row.is-dead { background: rgba(120,20,20,.55); }
+@keyframes s3d-kf-in { from { opacity: 0; transform: translateX(12px); } }
+.s3d-kf__t { color: #eabe54; }
+.s3d-kf__ct { color: #8fb3ec; }
+.s3d-kf__w { height: 20px; width: auto; max-width: 74px; object-fit: contain; }
+.s3d-kf__mark { height: 18px; width: auto; }
+.s3d-kf__wtext { color: #fff; font-size: 12px; text-transform: uppercase; opacity: .9; }
+.s3d-kf__assist { display: inline-flex; align-items: center; gap: 4px; color: #fff; font-size: 13px; }
+.s3d-kf__assist .s3d-kf__mark { height: 14px; }
+
+/* инфо-панель в левом верхнем углу: fps, карта, тик, оружие, HP, скорость, живые, нагрузка */
+.s3d-info {
+  position: absolute; top: 10px; left: 10px; z-index: 3; pointer-events: none;
+  display: flex; flex-direction: column; gap: 2px; padding: 6px 9px;
+  font-size: .68rem; line-height: 1.35; color: #d8dee6; white-space: nowrap;
+  background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.08); border-radius: 3px;
+}
+.s3d-info span { color: #8b96a3; }
+.s3d-info .s3d-kf__t { color: #eabe54; }
+.s3d-info .s3d-kf__ct { color: #8fb3ec; }
+.s3d-info b { font-weight: 700; }
+.s3d-info .is-good { color: #4cff4c; }
+.s3d-info .is-mid { color: #f5c518; }
+.s3d-info .is-bad { color: #ff5d5d; }

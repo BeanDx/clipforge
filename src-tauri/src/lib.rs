@@ -11,6 +11,7 @@ mod overlay;
 mod preflight;
 mod profile;
 mod render;
+mod scene3d;
 mod reshade;
 mod setup;
 mod sky;
@@ -48,6 +49,10 @@ pub fn run() {
       render::parse_hud,
       render::parse_cam,
       render::parse_cine,
+      scene3d::scene_map,
+      scene3d::scene_players,
+      scene3d::scene_weapon,
+      scene3d::scene_icons,
       render::demo_info,
       render::compare_list,
       render::grab_frame,

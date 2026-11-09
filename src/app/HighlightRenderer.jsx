@@ -12,6 +12,7 @@ import { fontsReady, renderHudFrames } from "../features/demo/hud";
 import { SkinsPanel, planForRust, planIsEmpty } from "../features/skins/skins";
 import { MusicPanel, MUSIC_DEFAULT, renderLyricFrames, chorusDrops, alignChorusToKill, chainMusic } from "../features/music/music";
 import { orbitPath, tailPath } from "../features/demo/cine";
+import Scene3DButton from "../features/scene3d/Scene3DButton";
 import { lyricStyle } from "../features/music/lyricStyles";
 import { MatchDossier, infoSummary, mapName, mapTint } from "../features/match/dossier";
 import { drawCard } from "../features/match/card";
@@ -2008,6 +2009,8 @@ const voicePayload = useMemo(() => {
                             <span className="mo-tags">{rest.slice(0, 5).map((t) => <em key={t}>{tagLabel(t)}</em>)}</span>
                           )}
                         </button>
+                        <Scene3DButton clip={myClips.find((c) => c.round === r.round)} demoPath={demo?.path} steamid={playerId}
+                          map={info?.map || (demo && cachedInfo(demo.path)?.map) || ""} cs2={paths.cs2} fov={fov} orbitOn={!!fx.camOrbit} />
                       </li>
                     );
                   })}

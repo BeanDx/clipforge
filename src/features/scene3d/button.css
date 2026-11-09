@@ -1,0 +1,16 @@
+/* кнопка «3D» на карточке момента: маленький ярлык в правом нижнем углу карточки.
+   Селекторы с .events — чтобы перебить общие стили кнопок списка (ширина 100%, рамка, сдвиг). */
+.mo-list li { position: relative; display: flex; }
+/* карточка во всю высоту ячейки — ярлык всегда внутри её рамки */
+.mo-list li > button.mo { flex: 1; min-width: 0; }
+.mo-list li .mo-meter { margin-right: 34px; }
+.events button.mo-3d {
+  position: absolute; right: 10px; bottom: 6px; z-index: 1;
+  width: auto; height: 16px; display: inline-flex; align-items: center; justify-content: center; gap: 0;
+  padding: 0 6px; font-size: .62rem; font-weight: 700; letter-spacing: .06em; line-height: 1;
+  color: var(--dim); background: var(--bg); border: 1px solid var(--line-hi);
+  opacity: .7; transform: none; transition: color .15s, border-color .15s, opacity .15s;
+}
+.mo-list li:hover .events button.mo-3d, .mo-list li:hover button.mo-3d { opacity: 1; }
+.events button.mo-3d:hover { color: var(--yellow); border-color: var(--yellow); transform: none; }
+.events button.mo-3d:active { transform: scale(.95); }

@@ -12,7 +12,7 @@
 [![Stars](https://img.shields.io/github/stars/BeanDx/clipforge?style=for-the-badge&color=f5c518&labelColor=0c1016)](https://github.com/BeanDx/clipforge/stargazers)
 
 **Drop in a CS2 demo, get ready-to-post highlight edits.**<br>
-clipforge finds your best moments, records them in-game through HLAE and adds slow-mo, music with 3D lyrics, skins and a victim POV replay. No video editor needed.
+clipforge finds your best moments, lets you preview them in 3D, records them in-game through HLAE and adds slow-mo, music with 3D lyrics, skins and a victim POV replay. No video editor needed.
 
 </div>
 
@@ -39,7 +39,9 @@ Every round of every player gets a score and tags, the way highlight services do
 - **Beat-synced zoom and shake** from the track's kick and bass
 - **Atmosphere**: Night, Fog, Sunset, Neon, as a color grade plus real in-game fog and sky through HLAE
 - **Damage numbers** next to the crosshair, a full **match HUD** drawn from demo data, or a clean killfeed-only view
-- Frame blending, any resolution and aspect ratio, **stretched 4:3**, GPU encoding (NVENC, AMF, Quick Sync)
+- **Graphics**: as in game, **Cinematic** (ReShade: soft corner shadows, bounce light, reflections, bloom, film color) or **Max quality** (records at twice the size and scales down: no jaggies, sharper textures; needs AMD VSR or NVIDIA DSR turned on once)
+- **Cut the search between kills**: if you ran around the map for a while between kills of one moment, the middle is cut out
+- Frame blending, any resolution and aspect ratio, **stretched 4:3** (including 1440×1080, exactly 1920×1080 after stretching), GPU encoding (NVENC, AMF, Quick Sync)
 
 <p align="center"><img src="docs/screenshots/studio-effects-en.webp" alt="Clip settings" width="100%"></p>
 
@@ -49,14 +51,36 @@ Every round of every player gets a score and tags, the way highlight services do
 - The chorus lands exactly on your last kill, together with a smooth slow-mo
 
 ### ◉ Cinematic camera
-- **Victim POV replay**: after the clip, every kill is replayed through the eyes of the player you killed
-- **Orbit camera** around the player after the final kill (experimental)
+- **Victim POV replay**: after the clip, every kill is replayed through the eyes of the player you killed, a moment past the death so you see them drop
+- **Orbit camera** around the player after the final kill
+- **Post-round reaction**: if the moment ended the round, the clip jumps to the next round's spawn, the camera circles the player and you hear the team react in voice chat
+
+### 🧊 3D preview before recording
+Press **3D** on any moment to watch it right in the app, before CS2 even starts.
+
+- The real map geometry, exported from **your own CS2 install** (nothing from Valve ships with clipforge)
+- All ten players as dummies in team colors, with names, crouching and deaths, straight from the demo
+- **Player POV** with the real position and angles, a CS2-style crosshair and the **weapon in hand**: the model and textures come from the game and change when the player switches weapons
+- **Shots you can see**: muzzle flash, tracers, recoil and crosshair kick, for everyone on the map
+- A **killfeed** with the game's own icons: headshot, wallbang, through smoke, no-scope, blind, assists
+- **With orbit** plays the exact `mirv_campath` that goes to HLAE, so you see where the orbit camera will fly. **Free camera** shows that path as a yellow line
+- A timeline with kill marks, 0.25× / 0.5× / 1× speed and a compact info panel: FPS, tick, weapon, HP, speed, players alive
+
+<p align="center"><img src="docs/screenshots/preview3d-en.webp" alt="3D preview: player POV with the weapon, crosshair and killfeed" width="100%"></p>
+
+<p align="center"><img src="docs/screenshots/preview3d-free-en.webp" alt="3D preview: free camera and the orbit path" width="100%"></p>
+
+### ✂️ Edits and videos from several demos
+- **Clips** or **Edit** mode on the Demo tab. Edit presets: **Night Edit** (a night intro with stars, a moon, glowing dust and lyrics, then the best kills, each on a beat) and **Cinematic**
+- **One video from several demos**: pick moments in one demo, open another and pick there. Everything goes into one render, recorded in a single CS2 run
 
 ### ◆ Skins
 Change weapon skins, the knife model and finish, and gloves. clipforge writes a modified copy of the demo, so nothing touches your inventory or the game files.
 
-### 📊 Match stats
-Things the scoreboard doesn't show: crosshair codes (one click to copy), accuracy, counter-strafing, time to kill, opening duels, distance run, chat and server settings. Optional FACEIT levels with your own API key.
+### 📊 Match stats and profile
+- Things the scoreboard doesn't show: crosshair codes (one click to copy), accuracy, counter-strafing, time to kill, opening duels, distance run, chat and server settings. Optional FACEIT levels with your own API key
+- **Profile**: Steam and FACEIT stats, form over the last 30 matches, maps, and what clipforge recorded while you played (hours, matches, weapons). Only matches on Valve servers and FACEIT count
+- **Achievements** in bronze, silver and gold, **Steam friends**, and a side-by-side **comparison** of any two players
 
 ### 🖼 Highlights gallery, player card and more
 - A gallery of finished clips with previews, sorting, filters and a built-in player
@@ -64,6 +88,9 @@ Things the scoreboard doesn't show: crosshair codes (one click to copy), accurac
 - **Before / after** slider: raw demo vs the finished clip, same moment
 - A hint on top of CS2 shows which key starts recording and the live progress. It never ends up in the video
 - A notification when your highlight is ready
+- **First-run wizard**: finds CS2 in every Steam library, checks HLAE, the highlights folder and free space, and records a 5-second test clip
+- **Auto-updates** with a "What's new" window
+- A chicken lives at the bottom of the window. You can pet it, grab it and throw it, and it wears headphones while you render. It and its sounds can be turned off
 - English and Russian interface, switched live
 
 <table>
@@ -84,6 +111,8 @@ Things the scoreboard doesn't show: crosshair codes (one click to copy), accurac
 ```
  .dem ──► demoparser2 ──► moments + stats ──► you pick the clips
                                                     │
+     3D preview? ──► map + weapons from your CS2 ◄──┤
+                                                    │
         skins? ──► source2-demo rewrites a copy ◄───┘
                                                     │
  CS2 + HLAE plays the demo, you press F10 ──► raw frames + audio
@@ -92,7 +121,7 @@ Things the scoreboard doesn't show: crosshair codes (one click to copy), accurac
 ```
 
 1. The demo is parsed with **demoparser2**: kills, damage, positions, rounds, equipment.
-2. Moments are scored and shown on a round timeline.
+2. Moments are scored and shown on a round timeline. For the 3D preview, **Source 2 Viewer** exports the map, weapon models and killfeed icons from your CS2 once and caches them, and **three.js** draws the scene.
 3. If you changed skins, the demo copy is rewritten with **source2-demo**.
 4. **CS2 launches through HLAE** with the demo. You can watch it first, recording starts when you press the hotkey (F10 by default).
 5. HLAE records frames straight from the engine. **ffmpeg** then puts the clip together with all the effects.
@@ -103,6 +132,7 @@ Things the scoreboard doesn't show: crosshair codes (one click to copy), accurac
 - Windows 10 or 11
 - [Counter-Strike 2](https://store.steampowered.com/app/730) installed through Steam
 - [HLAE](https://www.advancedfx.org) (Half-Life Advanced Effects). Its ffmpeg is used for encoding, so nothing else is needed
+- clipforge downloads the rest itself the first time it's needed: ReShade for the Cinematic look (~10 MB) and Source 2 Viewer CLI for the 3D preview (~53 MB)
 
 **To build from source, also:**
 - [Node.js](https://nodejs.org) 18 or newer
@@ -111,7 +141,7 @@ Things the scoreboard doesn't show: crosshair codes (one click to copy), accurac
 
 ## Getting started
 
-**Installer:** download `clipforge_x.y.z_x64-setup.exe` from [Releases](https://github.com/BeanDx/clipforge/releases) and run it. Everything it needs is inside, including its own copy of Node.js for demo parsing.
+**Installer:** download `clipforge_x.y.z_x64-setup.exe` from [Releases](https://github.com/BeanDx/clipforge/releases) and run it. Everything it needs is inside, including its own copy of Node.js for demo parsing. After that it updates by itself.
 
 **From source:**
 
@@ -131,9 +161,9 @@ npx tauri build
 The installer ends up in `src-tauri/target/release/bundle/`.
 
 **First run:**
-1. Open **Settings** and check the paths to `HLAE.exe` and `cs2.exe` (they're found automatically when possible) and the output folder.
+1. The setup wizard finds CS2 and HLAE, checks the highlights folder and can record a 5-second test. You can run it again from **Settings**.
 2. Drop a `.dem` file on the **Demo** tab.
-3. Pick a player in **Match stats**, choose moments, tweak **Clip settings**.
+3. Pick a player in **Match stats**, choose moments, tweak **Clip settings**. Press **3D** on a moment to preview it.
 4. Press **Start render**, wait for the demo to load in CS2 and press **F10**.
 5. After pressing F10 you can alt-tab and do something else, recording keeps going. When it's done you get a notification and the clips land in **Highlights**.
 
@@ -168,6 +198,12 @@ No. clipforge writes a modified copy of the demo file and records from it. Your 
 </details>
 
 <details>
+<summary><b>Does the 3D preview ship any game files?</b></summary>
+<br>
+No. The map, weapon models and icons are exported from the CS2 you have installed with the open-source Source 2 Viewer and cached in <code>%LOCALAPPDATA%\clipforge</code>. After a map update in CS2 the map is exported again. Workshop maps aren't supported.
+</details>
+
+<details>
 <summary><b>Which demos work?</b></summary>
 <br>
 CS2 demos from FACEIT, Valve matchmaking and Premier, and SourceTV demos from community servers.
@@ -183,6 +219,9 @@ CS2 demos from FACEIT, Valve matchmaking and Premier, and SourceTV demos from co
 | [source2-demo](https://crates.io/crates/source2-demo) | demo rewriting for skins (a patched copy lives in `src-tauri/vendor`) |
 | [HLAE](https://github.com/advancedfx/advancedfx) | in-game recording, camera paths, sky and colors |
 | [ffmpeg](https://ffmpeg.org) | post-processing and encoding |
+| [three.js](https://threejs.org) | 3D preview |
+| [Source 2 Viewer](https://github.com/ValveResourceFormat/ValveResourceFormat) | exports maps, weapons and icons from your CS2 for the 3D preview |
+| [ReShade](https://reshade.me) | the Cinematic and Max quality look |
 | [LRCLIB](https://lrclib.net) | synced lyrics |
 | [CSGO-API](https://github.com/ByMykel/CSGO-API) | skin catalog and images |
 | [FACEIT Data API](https://developers.faceit.com) | optional player levels |
@@ -190,12 +229,14 @@ CS2 demos from FACEIT, Valve matchmaking and Premier, and SourceTV demos from co
 ## Roadmap
 
 - [x] Prebuilt installer
-- [ ] Auto-updates
-- [ ] First-run setup wizard
-- [ ] Batch rendering of several demos
+- [x] Auto-updates
+- [x] First-run setup wizard
+- [x] One video from several demos
+- [x] 3D preview of a moment before recording
+- [x] Achievements
+- [ ] Hands and skins in the 3D preview
 - [ ] Kill tags in the video (WALLBANG, 1v3 CLUTCH)
 - [ ] Trimming and export presets for TikTok and Discord
-- [ ] Personal records and achievements across all demos
 
 Ideas and bug reports are welcome in [Issues](https://github.com/BeanDx/clipforge/issues).
 
