@@ -8,7 +8,7 @@ try {
   const [file, steamid, killsJson] = process.argv.slice(2);
   const out = JSON.parse(killsJson).map((k) => {
     const ticks = [];
-    for (let t = k - 16; t <= k + 220; t += 4) ticks.push(t);
+    for (let t = k - 16; t <= k + 800; t += 4) ticks.push(t); // до ~12.5 с после тика: облёт и самая длинная «реакция после раунда»
     const rows = parseTicks(file, ["X", "Y", "Z", "yaw", "game_time"], ticks, [steamid])
       .filter((r) => String(r.steamid) === String(steamid) && r.X != null)
       .sort((a, b) => a.tick - b.tick);

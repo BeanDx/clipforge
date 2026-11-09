@@ -127,11 +127,15 @@ export function alignChorusToKill({ lrc, start, clip, slowmo }) {
   return s >= 0 ? { start: +s.toFixed(3), drops: [kill] } : null;
 }
 
+// Повтор глазами жертвы идёт ещё столько тиков после её смерти (REPLAY_TAIL в render.rs)
+const REPLAY_TAIL = 48;
 // Повторы глазами жертв в конце клипа, секунды (как replays в render.rs)
 function replaySecs(clip) {
   const reps = clip.cine?.victims?.length ? clip.cine.victims.map((v) => v.kill)
     : clip.cine?.victimSlot != null ? [clip.cine.kill] : [];
-  return reps.reduce((s, k) => s + (k + 16 - Math.max(k - 77, clip.start)) / TICKRATE, 0);
+  // и «реакция после раунда» на спавне — после повторов (tail_secs в render.rs)
+  const tail = clip.tail ? (clip.tail.to - clip.tail.from) / TICKRATE : 0;
+  return reps.reduce((s, k) => s + (k + REPLAY_TAIL - Math.max(k - 77, clip.start)) / TICKRATE, 0) + tail;
 }
 
 // Длина готового клипа: запись со всеми замедлениями плюс повторы

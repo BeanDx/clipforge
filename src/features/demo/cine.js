@@ -29,7 +29,18 @@ export function orbitPath(data, kill, clipEnd, fov = 90) {
   const end = Math.min(start + Math.round(2.4 * TICKRATE), clipEnd - 4);
   if (end - start < TICKRATE * 0.8) return null;
   // начинаем за плечом игрока (видно то же, что видел он) и уходим по дуге в сторону
-  const a0 = data.yaw + 200, a1 = data.yaw + 80;
+  return arcPath(data, start, end, fov, { a0: data.yaw + 200, a1: data.yaw + 80, r0: 85, dr: 45, h0: 18, dh: 16 });
+}
+
+// «Реакция после раунда»: с конца клипа камера уходит в третье лицо — медленно, шире и выше обычного
+// облёта, чтобы игрок был в кадре всё время, пока в голосовом чате реагируют. { xml, start, end } или null.
+export function tailPath(data, from, to, fov = 90) {
+  if (!data?.pts?.length || to - from < TICKRATE) return null;
+  const start = from, end = to - 4;
+  return { ...arcPath(data, start, end, fov, { a0: data.yaw + 180, a1: data.yaw + 60, r0: 110, dr: 60, h0: 30, dh: 30 }), start };
+}
+
+function arcPath(data, start, end, fov, { a0, a1, r0, dr, h0, dh }) {
   let pts = "";
   for (let t = start; t <= end + STEP; t += STEP) {
     const tick = Math.min(t, end);
@@ -37,7 +48,7 @@ export function orbitPath(data, kill, clipEnd, fov = 90) {
     const [px, py, pz] = posAt(data.pts, tick);
     const tz = pz + 52; // смотрим в район груди-головы
     const a = ((a0 + (a1 - a0) * u) * Math.PI) / 180;
-    const r = 85 + 45 * u, h = 18 + 16 * u;
+    const r = r0 + dr * u, h = h0 + dh * u;
     const cx = px + r * Math.cos(a), cy = py + r * Math.sin(a), cz = tz + h;
     const yaw = (Math.atan2(py - cy, px - cx) * 180) / Math.PI;
     const pitch = (Math.atan2(cz - tz, r) * 180) / Math.PI;

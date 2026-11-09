@@ -98,6 +98,8 @@ export function buildMoments(raw, tickrate = 64, before = 1.5, after = 2) {
           noscope: !!d.noscope && SNIPER.test(w), air: !!d.attackerinair, blind: !!d.attackerblind,
           knife: KNIFE.test(w), taser: /taser/.test(w), dist: Number(d.distance) || 0,
           opening: !opened,
+          // сколько у соперников осталось живых после этого килла: 0 — килл закончил раунд
+          left: st ? alive[vt]?.size : undefined,
         };
         opened = true;
         if (!per.has(attacker)) per.set(attacker, { id: attacker, name: d.attacker_name, team: at, kills: [] });
@@ -184,6 +186,13 @@ export function buildMoments(raw, tickrate = 64, before = 1.5, after = 2) {
         rawTicks: ticks,
         victims: ks.map((k) => k.victim),
         hsTicks: ks.filter((k) => k.hs).map((k) => k.tick),
+        // момент заканчивает раунд: последним киллом добил всех, выиграл клатч или разминировал —
+        // тогда «реакция после раунда»: в начале следующего раунда, пока все стоят на спавне
+        // (respawn — тик респавна), камера облетает игрока, а в звуке голосовой чат
+        endsRound: ks.at(-1)?.left === 0 || clutchWon || !!m.defuse,
+        respawn: (raw.respawns || []).find((t) => t > to && t < (byNum.get(r + 1)?.start ?? Infinity)) ?? null,
+        // конец фризтайма следующего раунда: дальше все побегут — реакция обрезается до него
+        nextStart: byNum.get(r + 1)?.start ?? null,
       });
     }
   }

@@ -61,6 +61,23 @@ pub struct Clip {
     // куски одной группы после записи склеиваются обратно в один клип
     #[serde(default)]
     pub group: Option<u32>,
+    // свой голосовой чат клипа [indices, indices_h] — в подборке клипы из разных демок, слоты
+    // тиммейтов и соперников в каждой свои; без него — общий из задания
+    #[serde(default)]
+    pub voice: Option<(i64, i64)>,
+    // «реакция после раунда»: после клипа и повторов демка перематывается к респавну следующего
+    // раунда (все стоят на спавне) и пишет from..to — камера облетает игрока, слышно голосовой чат
+    #[serde(default)]
+    pub tail: Option<Tail>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct Tail {
+    pub from: u32,
+    pub to: u32,
+    // путь камеры HLAE (облёт вокруг игрока); без него — просто глазами игрока
+    #[serde(default)]
+    pub xml: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -837,6 +854,12 @@ fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, Str
         // HUD — явно в начале каждого клипа: CS2 помнит эти настройки между запусками, и после
         // чистого интро (или прошлого рендера с другим режимом) у части демок HUD пропадал
         sky_on += &format!("cl_drawhud {}\ncl_draw_only_deathnotices {}\n", (!cl.clean) as u8, (j.hud == "killfeed" || j.hud == "match") as u8);
+        // свой голосовой чат клипа: ставится в начале клипа, повтор глушит и возвращает именно его
+        let voice = match cl.voice {
+            Some((lo, hi)) => format!("tv_listen_voice_indices_h {hi}\ntv_listen_voice_indices {lo}\n"),
+            None => voice.clone(),
+        };
+        if cl.voice.is_some() { sky_on += &voice; }
         files.push((
             format!("cf_{}_s", i),
             format!("{sky_on}spec_player {}\nmirv_streams record start\n", cl.slot),
@@ -849,7 +872,7 @@ fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, Str
         let mute_reps = !reps.is_empty() && !j.replay_voice;
         if mute_reps { end += &voice; }
         let last_in_demo = group_end(i) == i + 1;
-        if !reps.is_empty() && !last_in_demo {
+        if leaves_clip(cl) && !last_in_demo {
             // после повтора возвращаем расписание оставшихся клипов
             end += &format!("exec cf_{i}_rest\n");
         }
@@ -862,8 +885,10 @@ fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, Str
         }
         files.push((format!("cf_{}_e", i), end));
         c += &format!("mirv_cmd addAtTick {} \"exec cf_{}_s\"\n", cl.start, i);
-        // конец клипа: сразу конец записи или сначала повтор глазами жертвы
-        let end_cmd = if reps.is_empty() { format!("cf_{i}_e") } else { format!("cf_{i}_rep0") };
+        // после клипа и повторов — реакция на спавне (если есть), потом конец записи
+        let after = if cl.tail.is_some() { format!("cf_{i}_tail") } else { format!("cf_{i}_e") };
+        // конец клипа: сразу дальше или сначала повтор глазами жертвы
+        let end_cmd = if reps.is_empty() { after.clone() } else { format!("cf_{i}_rep0") };
         c += &format!("mirv_cmd addAtTick {} \"exec {end_cmd}\"\n", cl.end);
         // метки прогресса: каждые полсекунды демки игра выполняет пустой cfg «cfp_<тик>».
         // В console.log (-condebug) попадает строка «execing cfp_<тик>» (вывод echo туда не пишется),
@@ -875,7 +900,7 @@ fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, Str
         // повторы: запись идёт дальше, демка по очереди отматывается к каждому киллу за ~1.2 с до него
         // и показывает его глазами жертвы до её смерти; после последнего — обычный конец клипа
         for (r, &(from, to, v)) in reps.iter().enumerate() {
-            let next = if r + 1 < reps.len() { format!("cf_{i}_rep{}", r + 1) } else { format!("cf_{i}_e") };
+            let next = if r + 1 < reps.len() { format!("cf_{i}_rep{}", r + 1) } else { after.clone() };
             // отмотка сбрасывает, за кем следит камера: spec_player до demo_gototick терялся и повтор
             // снова шёл с наших глаз. Переключаемся уже на тиках повтора — сразу и ещё раз для надёжности.
             files.push((format!("cf_{i}_vic{r}"), format!("spec_player {v}\n")));
@@ -885,6 +910,27 @@ fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, Str
                 "{mute}mirv_cmd clear\nmirv_cmd addAtTick {} \"exec cf_{i}_vic{r}\"\nmirv_cmd addAtTick {} \"exec cf_{i}_vic{r}\"\nmirv_cmd addAtTick {to} \"exec {next}\"\nspec_player {v}\ndemo_gototick {from}\n",
                 from + 1, from + 8
             )));
+        }
+        if let Some(t) = &cl.tail {
+            // реакция после раунда: перемотка к спавну, камера на игрока (после отмотки слежка
+            // сбрасывается — как в повторе, переключаемся ещё и на тиках куска), голоса снова слышно
+            files.push((format!("cf_{i}_tsp"), format!("spec_player {}\n", cl.slot)));
+            let unmute = if mute_reps { voice.as_str() } else { "" };
+            let mut tc = format!("{unmute}mirv_cmd clear\nmirv_cmd addAtTick {} \"exec cf_{i}_tsp\"\nmirv_cmd addAtTick {} \"exec cf_{i}_tsp\"\n", t.from + 1, t.from + 8);
+            let mut off = String::new();
+            if let Some(xml) = &t.xml {
+                let path = cfg_dir.join(format!("cf_{i}_tail.xml"));
+                files.push((format!("cf_{i}_tail.xml"), xml.clone()));
+                files.push((format!("cf_{i}_tail_on"), format!(
+                    "sv_cheats 1\ncl_drawhud 0\nr_drawviewmodel 0\nmirv_campath clear\nmirv_campath load \"{}\"\nmirv_campath enabled 1\n",
+                    path.to_string_lossy().replace('\\', "/")
+                )));
+                tc += &format!("mirv_cmd addAtTick {} \"exec cf_{i}_tail_on\"\n", t.from + 2);
+                off += "mirv_campath enabled 0\nmirv_campath clear\nr_drawviewmodel 1\n";
+            }
+            files.push((format!("cf_{i}_tail_off"), format!("{off}exec cf_{i}_e\n")));
+            tc += &format!("mirv_cmd addAtTick {} \"exec cf_{i}_tail_off\"\nspec_player {}\ndemo_gototick {}\n", t.to, cl.slot, t.from);
+            files.push((format!("cf_{i}_tail"), tc));
         }
         if let Some(cn) = &cl.cine {
             // облёт: путь камеры HLAE; HUD и руки с оружием на это время прячем
@@ -904,7 +950,7 @@ fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, Str
     }
     // для каждого клипа — расписание всех следующих (восстанавливается после повтора)
     for i in 0..sched.len() {
-        if !replays(&j.clips[i]).is_empty() && group_end(i) > i + 1 {
+        if leaves_clip(&j.clips[i]) && group_end(i) > i + 1 {
             files.push((format!("cf_{i}_rest"), sched[i + 1..group_end(i)].concat()));
         }
         // первый клип следующей демки: её расписание и, когда демка начнёт играть, настройки и
@@ -924,8 +970,12 @@ fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, Str
     (head, c, files)
 }
 
+// Сколько тиков повтор идёт после смерти жертвы (~0.75 с): видно, как она падает, а не обрыв на выстреле.
+// Тот же REPLAY_TAIL во фронтенде (src/features/music/music.jsx) — по нему считается длина клипа.
+const REPLAY_TAIL: u32 = 48;
+
 // Повторы киллов глазами жертв, по порядку: (с какого тика отматываем, на каком заканчиваем, слот жертвы).
-// Каждый — с ~1.2 с до килла до его конца. Старый формат (только последний килл) тоже понимаем.
+// Каждый — с ~1.2 с до килла и ещё REPLAY_TAIL после него. Старый формат (только последний килл) тоже понимаем.
 fn replays(cl: &Clip) -> Vec<(u32, u32, u8)> {
     let Some(cn) = cl.cine.as_ref() else { return vec![] };
     let list: Vec<(u32, u8)> = if !cn.victims.is_empty() {
@@ -933,11 +983,22 @@ fn replays(cl: &Clip) -> Vec<(u32, u32, u8)> {
     } else {
         cn.victim_slot.map(|s| vec![(cn.kill, s)]).unwrap_or_default()
     };
-    list.into_iter().map(|(k, s)| (k.saturating_sub(77).max(cl.start), k + 16, s)).collect()
+    list.into_iter().map(|(k, s)| (k.saturating_sub(77).max(cl.start), k + REPLAY_TAIL, s)).collect()
 }
 
 fn replay_secs(cl: &Clip) -> f64 {
     replays(cl).iter().map(|(a, b, _)| b.saturating_sub(*a) as f64 / TICKRATE).sum()
+}
+
+// реакция после раунда, секунды (пишется после повторов)
+fn tail_secs(cl: &Clip) -> f64 {
+    cl.tail.as_ref().map_or(0.0, |t| t.to.saturating_sub(t.from) as f64 / TICKRATE)
+}
+
+// клип уходит со своей шкалы (повтор или реакция перематывают демку и чистят расписание) —
+// после него расписание остальных клипов демки восстанавливается (cf_<i>_rest)
+fn leaves_clip(cl: &Clip) -> bool {
+    !replays(cl).is_empty() || cl.tail.is_some()
 }
 
 // Только take-папки HLAE: рядом лежат hud_N с кадрами HUD, их считать клипами нельзя
@@ -1048,7 +1109,7 @@ fn settled(d: &Path, sizes: &mut HashMap<PathBuf, (u64, u32)>) -> bool {
 // Длительность готового клипа: запись от start до end плюс удлинение от slow-mo
 fn out_duration(j: &Job, cl: &Clip) -> f64 {
     // повтор от лица убитого дописывается в конец записи клипа, в обычной скорости
-    let replay = replay_secs(cl);
+    let replay = replay_secs(cl) + tail_secs(cl);
     out_duration_main(j, cl) + replay
 }
 
@@ -1449,7 +1510,7 @@ pub fn start_render(app: AppHandle, job: Job) -> Result<(), String> {
                 handled.insert(d.clone());
                 let clip = job.clips.get(i).cloned().unwrap_or_else(|| Clip {
                     account_id: 0, name: String::new(), round: 0, start: 0, end: 0, slot: 1,
-                    kill_ticks: vec![], hits: vec![], drops: vec![], music_start: None, cine: None, hs_ticks: vec![], music_fade_in: None, music_fade_out: None, night: false, clean: false, demo: None, group: None,
+                    kill_ticks: vec![], hits: vec![], drops: vec![], music_start: None, cine: None, hs_ticks: vec![], music_fade_in: None, music_fade_out: None, night: false, clean: false, demo: None, group: None, voice: None, tail: None,
                 });
                 // "2026-10-30 15-40-12 R05 3K.mp4" — сортируется по времени, как остальные видео в папке
                 let dst = match &job.parts_dir {
@@ -1638,6 +1699,52 @@ mod replay_voice_tests {
         assert!(end.contains("tv_listen_voice_indices_h 0\ntv_listen_voice_indices 1023\n"));
         // голос возвращается раньше, чем начнётся следующий клип
         assert!(end.find("tv_listen_voice_indices 1023").unwrap() < end.find("demo_gototick").unwrap());
+    }
+
+    #[test]
+    fn clip_voice_overrides_job_voice() {
+        let mut j = job(false);
+        j.clips[1].voice = Some((12, 0));
+        let (_, _, files) = build_cfg(&j, 60, Path::new("w"), Path::new("cfg"));
+        assert!(!file(&files, "cf_0_s").contains("tv_listen_voice"));
+        assert!(file(&files, "cf_1_s").contains("tv_listen_voice_indices_h 0\ntv_listen_voice_indices 12\n"));
+        assert!(file(&files, "cf_1_e").contains("tv_listen_voice_indices 12\n"));
+    }
+
+    #[test]
+    fn tail_goes_after_replays_to_the_spawn() {
+        let mut j = job(false);
+        j.clips[0].tail = Some(Tail { from: 2500, to: 2756, xml: Some("<campath/>".into()) });
+        let (_, _, files) = build_cfg(&j, 60, Path::new("w"), Path::new("cfg"));
+        // последний повтор ведёт к реакции, а не к концу клипа
+        assert!(file(&files, "cf_0_rep0").contains("\"exec cf_0_tail\""));
+        let t = file(&files, "cf_0_tail");
+        // голоса возвращаются, демка уходит к спавну, облёт включается и в конце выключается
+        assert!(t.starts_with("tv_listen_voice_indices_h 0\ntv_listen_voice_indices 1023\nmirv_cmd clear\n"));
+        assert!(t.contains("mirv_cmd addAtTick 2502 \"exec cf_0_tail_on\"\n"));
+        assert!(t.contains("mirv_cmd addAtTick 2756 \"exec cf_0_tail_off\"\n"));
+        assert!(t.ends_with("spec_player 2\ndemo_gototick 2500\n"));
+        assert!(file(&files, "cf_0_tail_off").ends_with("exec cf_0_e\n"));
+        // расписание второго клипа восстанавливается
+        assert!(file(&files, "cf_0_e").contains("exec cf_0_rest\n"));
+        assert!((tail_secs(&j.clips[0]) - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn tail_without_replays_starts_at_clip_end() {
+        let mut j = job(false);
+        j.clips[0].cine = None;
+        j.clips[0].tail = Some(Tail { from: 2500, to: 2756, xml: None });
+        let (_, c, files) = build_cfg(&j, 60, Path::new("w"), Path::new("cfg"));
+        assert!(c.contains("mirv_cmd addAtTick 2000 \"exec cf_0_tail\"\n"));
+        assert!(!file(&files, "cf_0_tail").contains("tail_on"));
+        assert!(file(&files, "cf_0_e").contains("exec cf_0_rest\n"));
+    }
+
+    #[test]
+    fn replay_runs_past_the_death() {
+        let j = job(false);
+        assert_eq!(replays(&j.clips[0]), vec![(2000 - 64 - 77, 2000 - 64 + REPLAY_TAIL, 7)]);
     }
 
     #[test]

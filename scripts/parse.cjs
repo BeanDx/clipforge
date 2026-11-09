@@ -44,8 +44,11 @@ try {
     rounds.push({ round: null, start: lastTick, players: at.get(lastTick) || [] }); // счёт в конце матча
     try { defuses = parseEvent(file, "bomb_defused", [], []).map((d) => ({ tick: d.tick, id: String(d.user_steamid) })); } catch {}
   } catch {}
+  // респавны — начало каждого раунда, все стоят на спавне (дальше фризтайм): там «реакция после раунда»
+  let respawns = [];
+  try { respawns = [...new Set(parseEvent(file, "round_start", [], []).map((e) => e.tick))].filter((t) => t > 1).sort((a, b) => a - b); } catch {}
 
-  const json = JSON.stringify({ size: fs.statSync(file).size, events, players, hurts, rounds, defuses, fires, fixed },
+  const json = JSON.stringify({ size: fs.statSync(file).size, events, players, hurts, rounds, defuses, fires, fixed, respawns },
     (_, v) => (typeof v === "bigint" ? v.toString() : v));
   process.stdout.write(json);
 } catch (e) {
