@@ -69,6 +69,60 @@ const flashSprite = (size) => {
 };
 const SHOT_TICKS = 5; // столько тиков после выстрела видна вспышка (~80 мс)
 
+// Снайперский зум, как в игре: fov на первом и втором щелчке; у AUG/SG — без чёрной оптики
+const ZOOM_FOV = { AWP: [40, 10], "SSG 08": [40, 15], "SCAR-20": [40, 15], G3SG1: [40, 15], AUG: [45, 45], "SG 553": [45, 45] };
+const SCOPE_OVERLAY = new Set(["AWP", "SSG 08", "SCAR-20", "G3SG1"]);
+
+// гранаты: цвет следа полёта по типу
+const NADE_COLOR = { smoke: 0xd8dde3, fire: 0xff8a2a, flash: 0xfff6c8, he: 0xff4a3a, decoy: 0x9aa3ad };
+const smooth = (x) => { const k = Math.max(0, Math.min(1, x)); return k * k * (3 - 2 * k); };
+
+// случайные числа с зерном: облако дыма одной гранаты выглядит одинаково при перемотке
+function rng(seed) {
+  let s = seed >>> 0 || 1;
+  return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+}
+
+// дым: облако из шаров ~140 юнитов в радиусе, изнутри тоже серое (стоишь в смоке — ничего не видно)
+let puffGeo = null;
+function smokeCloud(n) {
+  puffGeo ||= new THREE.IcosahedronGeometry(1, 2);
+  const g = new THREE.Group();
+  const r = rng(Math.round(n.x * 7 + n.y * 13));
+  const mat = new THREE.MeshLambertMaterial({ color: 0xc4c9cf, emissive: 0x2a2d31, transparent: true, opacity: 0.97, side: THREE.DoubleSide, depthWrite: true });
+  for (let i = 0; i < 18; i++) {
+    const a = r() * Math.PI * 2, d = Math.sqrt(r()) * 95, h = r() * 90;
+    const m = new THREE.Mesh(puffGeo, mat);
+    m.position.set(Math.cos(a) * d, Math.sin(a) * d, 30 + h);
+    const s = 55 + r() * 35;
+    m.scale.set(s, s, s * 0.85);
+    g.add(m);
+  }
+  g.userData.mat = mat;
+  return g;
+}
+
+// молотов: светящееся пятно на полу и языки огня, которые мерцают
+function fireZone(n) {
+  const g = new THREE.Group();
+  const floor = new THREE.Mesh(new THREE.CircleGeometry(115, 32), new THREE.MeshBasicMaterial({ color: 0xff5a10, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
+  floor.position.z = 2;
+  g.add(floor);
+  const r = rng(Math.round(n.x * 11 + n.y * 3));
+  const flames = [];
+  for (let i = 0; i < 16; i++) {
+    const a = r() * Math.PI * 2, d = Math.sqrt(r()) * 100;
+    const s = flashSprite(1);
+    s.visible = true;
+    s.position.set(Math.cos(a) * d, Math.sin(a) * d, 18);
+    s.userData.ph = r() * 10;
+    g.add(s);
+    flames.push(s);
+  }
+  g.userData = { floor, flames };
+  return g;
+}
+
 function dummy(color, name, me) {
   const g = new THREE.Group();
   const mat = new THREE.MeshLambertMaterial({ color, emissive: color, emissiveIntensity: me ? 0.35 : 0.15 });
@@ -160,8 +214,32 @@ export class Scene3D {
     return name;
   }
 
-  async loadWeapon(name) {
-    this.weapons.set(name, null);
+  // зум прицела игрока клипа на тике: 0 — без зума, 1 / 2 — первый / второй
+  zoomAt(tick) {
+    const z = this.data?.zoom;
+    if (!z?.length) return 0;
+    const fi = (tick - this.data.start) / this.data.step;
+    let v = 0;
+    for (const [i, n] of z) { if (i <= fi) v = n; else break; }
+    return v;
+  }
+
+  // все стволы, которые игрок клипа держит на отрезке, — до показа, чтобы оружие было с первого кадра
+  async preloadWeapons(onProgress) {
+    const names = [...new Set((this.data?.weapons || []).map(([, n]) => n))];
+    let done = 0;
+    onProgress?.(0, names.length);
+    // выгрузка из игры всё равно идёт по одной (BUSY в scene3d.rs) — грузим подряд, чтобы считать прогресс
+    for (const n of names) { await this.loadWeapon(n); onProgress?.(++done, names.length); }
+  }
+
+  loadWeapon(name) {
+    if (!this.weaponLoads) this.weaponLoads = new Map();
+    if (!this.weaponLoads.has(name)) { this.weapons.set(name, null); this.weaponLoads.set(name, this.fetchWeapon(name)); }
+    return this.weaponLoads.get(name);
+  }
+
+  async fetchWeapon(name) {
     try {
       const src = await this.weaponSource?.(name);
       if (!src) return;
@@ -178,10 +256,17 @@ export class Scene3D {
       const g = new THREE.Group();
       root.rotation.y = Math.PI;
       g.add(root);
+      const bounds = () => {
+        g.updateMatrixWorld(true);
+        const b = new THREE.Box3();
+        root.traverse((o) => { if (o.isMesh && o.visible && o.parent?.visible !== false) b.expandByObject(o); });
+        return b;
+      };
+      let box = bounds();
+      // у снайперок начало координат модели заметно ниже ствола (AWP целиком выше нуля на 7–32 см),
+      // и в руках она висела над прицелом. Опускаем так, чтобы верх оптики был там же, где у винтовок
+      if (!box.isEmpty() && box.max.y > 0.2) { root.position.y -= box.max.y - 0.15; box = bounds(); }
       // дуло: передний край модели (после поворота — самый дальний по -z)
-      g.updateMatrixWorld(true);
-      const box = new THREE.Box3();
-      root.traverse((o) => { if (o.isMesh && o.visible && o.parent?.visible !== false) box.expandByObject(o); });
       const flash = flashSprite(0.09);
       if (!box.isEmpty()) flash.position.set((box.min.x + box.max.x) / 2, box.max.y - (box.max.y - box.min.y) * 0.18, box.min.z - 0.02);
       g.add(flash);
@@ -253,6 +338,81 @@ export class Scene3D {
       const d = dummy(isMe ? ME_COLOR : p.team === 2 ? T_COLOR : CT_COLOR, p.name, isMe);
       this.scene.add(d);
       this.dummies.set(p.id, d);
+    }
+    // разрывы гранат: дым, огонь, вспышка флешки, взрыв HE
+    this.blasts = (data.nades || []).map((n) => {
+      const o = n.k === "smoke" ? smokeCloud(n) : n.k === "fire" ? fireZone(n) : flashSprite(1);
+      o.position.set(n.x, n.y, n.z + (n.k === "flash" || n.k === "he" ? 20 : 0));
+      o.visible = false;
+      this.scene.add(o);
+      return { ...n, o };
+    });
+  }
+
+  // полёт гранат (приходит позже, отдельным вызовом): след и сама граната
+  setFlights(list) {
+    for (const f of this.flights || []) { this.scene.remove(f.line, f.ball); f.line.geometry.dispose(); }
+    this.flights = (list || []).map((n) => {
+      const pts = n.p.map(([, x, y, z]) => new THREE.Vector3(x, y, z));
+      const color = NADE_COLOR[n.k] || 0xffffff;
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.85, depthWrite: false }));
+      line.frustumCulled = false;
+      line.renderOrder = 5;
+      const ball = new THREE.Mesh(new THREE.SphereGeometry(2.4, 10, 8), new THREE.MeshBasicMaterial({ color }));
+      line.visible = ball.visible = false;
+      this.scene.add(line, ball);
+      return { ticks: n.p.map((q) => q[0]), pts, line, ball };
+    });
+  }
+
+  updateNades(t) {
+    for (const f of this.flights || []) {
+      const { ticks, pts, line, ball } = f;
+      const first = ticks[0], last = ticks[ticks.length - 1];
+      // след виден весь полёт и ещё полторы секунды после приземления, потом гаснет
+      const on = t >= first && t <= last + 96;
+      line.visible = on;
+      ball.visible = on && t <= last;
+      if (!on) continue;
+      let i = 0;
+      while (i < ticks.length - 1 && ticks[i + 1] <= t) i++;
+      line.geometry.setDrawRange(0, i + 1 + (t < last ? 1 : 0));
+      line.material.opacity = t <= last ? 0.85 : 0.85 * (1 - (t - last) / 96);
+      if (ball.visible) {
+        const j = Math.min(ticks.length - 1, i + 1);
+        const k = ticks[j] > ticks[i] ? (t - ticks[i]) / (ticks[j] - ticks[i]) : 0;
+        ball.position.lerpVectors(pts[i], pts[j], Math.max(0, Math.min(1, k)));
+      }
+    }
+    for (const b of this.blasts || []) {
+      const on = t >= b.t && t <= b.e;
+      b.o.visible = on;
+      if (!on) continue;
+      const age = t - b.t, left = b.e - t, k = age / Math.max(1, b.e - b.t);
+      if (b.k === "smoke") {
+        // раскрывается за секунду, рассеивается последние две
+        const grow = 0.25 + 0.75 * smooth(age / 64);
+        b.o.scale.set(grow, grow, grow);
+        b.o.userData.mat.opacity = 0.97 * smooth(left / 128);
+      } else if (b.k === "fire") {
+        const grow = 0.3 + 0.7 * smooth(age / 48);
+        const fade = smooth(left / 48);
+        b.o.scale.set(grow, grow, 1);
+        b.o.userData.floor.material.opacity = 0.5 * fade * (0.85 + 0.15 * Math.sin(t * 0.7));
+        for (const s of b.o.userData.flames) {
+          const w = Math.sin(t * 0.45 + s.userData.ph) * 0.5 + 0.5;
+          const sz = (34 + 30 * w) * fade;
+          s.scale.set(sz, sz * 1.5, 1);
+          s.position.z = 10 + sz * 0.6;
+          s.material.opacity = 0.65 + 0.35 * w;
+        }
+      } else {
+        // флешка — белая вспышка, HE — оранжевый шар; обе за доли секунды
+        const sz = (b.k === "flash" ? 260 : 220) * (0.4 + 0.6 * Math.sqrt(k));
+        b.o.scale.set(sz, sz, 1);
+        b.o.material.opacity = 1 - k;
+        b.o.material.color.set(b.k === "flash" ? 0xffffff : 0xff9a50);
+      }
     }
   }
 
@@ -387,19 +547,26 @@ export class Scene3D {
       this.camera.lookAt(this.camera.position.clone().add(dir(orbit.pitch, orbit.yaw)));
       this.setFov(orbit.fov);
       if (me) me.visible = !!pov;
-    } else if ((this.mode === "pov" || this.mode === "orbit") && pov) {
+    }
+    const held = this.heldAt(t);
+    const zoom = held && ZOOM_FOV[held] ? this.zoomAt(t) : 0;
+    if (!orbit && (this.mode === "pov" || this.mode === "orbit") && pov) {
       const eye = new THREE.Vector3(pov.x, pov.y, pov.z + 64 - 18 * pov.duck);
       this.camera.position.copy(eye);
       this.camera.lookAt(eye.clone().add(dir(pov.pitch, pov.yaw)));
-      this.setFov(this.fov);
+      this.setFov(zoom ? ZOOM_FOV[held][zoom - 1] : this.fov);
       if (me) me.visible = false; // своё тело в кадре не нужно
     } else if (this.mode === "free") {
       this.controls.update();
     }
+    this.updateNades(t);
     if (this.pathLine) this.pathLine.visible = this.mode === "free";
     const view = this.mode === "free" ? "free" : orbit ? "orbit" : pov ? "pov" : "none";
     if (view !== this.view) { this.view = view; this.canvas.parentElement.dataset.view = view; }
-    this.updateWeapon(view === "pov" ? this.heldAt(t) : null, pov);
+    // в оптике снайперки оружия не видно — только чёрная рамка с перекрестием (scene3d.css)
+    const scoped = view === "pov" && zoom > 0 && SCOPE_OVERLAY.has(held);
+    if (scoped !== this.scoped) { this.scoped = scoped; this.canvas.parentElement.dataset.scope = scoped ? "1" : ""; }
+    this.updateWeapon(view === "pov" && !scoped ? held : null, pov);
   }
 
   updateWeapon(name, pov) {

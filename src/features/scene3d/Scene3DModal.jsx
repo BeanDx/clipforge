@@ -70,6 +70,13 @@ export default function Scene3DModal({ demoPath, steamid, clip, map, cs2, fov, o
           const dir = glb.replace(/[\\/][^\\/]+$/, "");
           return { url: convertFileSrc(glb), resolve: (file) => convertFileSrc(`${dir}\\${file}`) };
         };
+        // все стволы клипа — до показа: иначе первые секунды игрок «без оружия», пока оно выгружается
+        await scene.preloadWeapons((d, t) => { if (!dead && t) setStage(tr("Загружаю модели оружия... {0} / {1}", d, t)); });
+        if (dead) return;
+        // полёт гранат читается дольше всего остального — дорисуется, когда придёт
+        invoke("scene_grenades", { path: demoPath, start: clip.start, end: clip.end })
+          .then((j) => { if (!dead) scene.setFlights(JSON.parse(j).nades); })
+          .catch((e) => console.warn("3D: гранаты", e));
         const kill = clip.killTicks?.[clip.killTicks.length - 1];
         if (kill != null) {
           const cine = await invoke("parse_cine", { path: demoPath, steamid, kills: JSON.stringify([kill]) }).then(JSON.parse).catch(() => null);
@@ -159,6 +166,12 @@ export default function Scene3DModal({ demoPath, steamid, clip, map, cs2, fov, o
         </div>
         <div className="s3d__view">
           <canvas ref={canvasRef} />
+          <div className="s3d__scope" aria-hidden="true">
+            <svg viewBox="0 0 100 100">
+              <path d="M0 50H100M50 0V100" stroke="#000" strokeWidth=".22" />
+              <path d="M0 50H34M66 50H100M50 0V34M50 66V100" stroke="#000" strokeWidth="1.1" />
+            </svg>
+          </div>
           <svg className="s3d__cross" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 2v7M12 15v7M2 12h7M15 12h7" stroke="rgba(0,0,0,.8)" strokeWidth="4" strokeLinecap="square" />
             <path d="M12 3v5M12 16v5M3 12h5M16 12h5" stroke="#4cff4c" strokeWidth="2" strokeLinecap="butt" />

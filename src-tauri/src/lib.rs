@@ -51,6 +51,7 @@ pub fn run() {
       render::parse_cine,
       scene3d::scene_map,
       scene3d::scene_players,
+      scene3d::scene_grenades,
       scene3d::scene_weapon,
       scene3d::scene_icons,
       render::demo_info,

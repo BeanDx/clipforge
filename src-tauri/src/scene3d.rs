@@ -211,3 +211,11 @@ pub async fn scene_players(path: String, start: i64, end: i64, steamid: String) 
         .await
         .map_err(|e| e.to_string())?
 }
+
+// Полёт гранат на отрезке (scripts/scene.cjs --grenades) — отдельно: читает всю демку и долгий
+#[tauri::command]
+pub async fn scene_grenades(path: String, start: i64, end: i64) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::render::run_node("scene.cjs", &["--grenades", &path, &start.to_string(), &end.to_string()]))
+        .await
+        .map_err(|e| e.to_string())?
+}

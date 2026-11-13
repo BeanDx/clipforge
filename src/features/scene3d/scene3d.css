@@ -44,6 +44,18 @@
 /* прицел в виде из глаз — как стандартный в CS2: четыре штриха с зазором и тёмной обводкой */
 .s3d__cross { display: none; position: absolute; left: 50%; top: 50%; width: 24px; height: 24px; margin: -12px 0 0 -12px; pointer-events: none; z-index: 2; }
 .s3d__view[data-view="pov"] .s3d__cross { display: block; }
+.s3d__view[data-scope="1"] .s3d__cross { display: none; }
+
+/* оптика снайперки: круг во всю высоту кадра, вокруг чёрное, по краю круга затемнение, тонкое перекрестие */
+.s3d__scope {
+  display: none; position: absolute; top: 0; bottom: 0; left: 50%; aspect-ratio: 1; transform: translateX(-50%);
+  border-radius: 50%; pointer-events: none; z-index: 2;
+  box-shadow: 0 0 0 100vmax #000;
+  background: radial-gradient(circle, transparent 62%, rgba(0,0,0,.35) 88%, rgba(0,0,0,.85) 100%);
+}
+.s3d__view[data-scope="1"] .s3d__scope { display: block; }
+.s3d__scope svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+
 /* выстрел: прицел разлетается и возвращается (--kick ставит engine.js) */
 .s3d__cross path { transform-origin: 12px 12px; }
 .s3d__cross path:first-child, .s3d__cross path:last-child { transform: scale(calc(1 + var(--kick, 0) * .55)); }

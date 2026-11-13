@@ -1203,6 +1203,7 @@ export default {
   "Читаю игроков из демки...": "Reading players from the demo...",
   "Загружаю геометрию...": "Loading geometry...",
   "Загружаю геометрию... {0}%": "Loading geometry... {0}%",
+  "Загружаю модели оружия... {0} / {1}": "Loading weapon models... {0} / {1}",
   "Глазами игрока": "Player POV",
   "С облётом": "With orbit",
   "Свободная камера": "Free camera",
