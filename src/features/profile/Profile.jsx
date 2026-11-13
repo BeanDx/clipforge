@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { tr, trError, useLang } from "../../i18n";
 import { mapName, mapTint } from "../match/dossier";
 import { LEVELS, LVL_COLOR, num, pct, pad, mapId, gameTime, fetchPlayer, summarize } from "./data";
+import { Records } from "./Records";
 import { Friends } from "./Friends";
 import { Compare } from "./Compare";
 import { Achievements } from "./Achievements";
@@ -269,6 +270,9 @@ export function Profile({ faceitKey, onGoSettings }) {
               </section>
             )}
 
+            {/* тип игрока и время суток (Records.jsx) */}
+            {games.length > 0 && <Records part="top" fc={f} />}
+
             {/* карты */}
             {maps.length > 0 && (
               <section className="pf-card pf-maps">
@@ -315,6 +319,9 @@ export function Profile({ faceitKey, onGoSettings }) {
                 </div>
               </section>
             )}
+
+            {/* рекорды и приколы за последние 100 матчей */}
+            {games.length > 0 && <Records part="bottom" fc={f} onOpenMatch={(id) => open(`https://www.faceit.com/en/cs2/room/${id}`)} />}
 
             {/* своё: что записал clipforge */}
             {data.own && (

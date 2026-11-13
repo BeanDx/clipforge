@@ -155,7 +155,7 @@ fn fget(key: &str, url: &str) -> Result<Option<Value>, String> {
 }
 
 // Игрок FACEIT по SteamID64 или нику (ссылка faceit.com/<lang>/players/<ник> тоже подходит):
-// { player, lifetime, maps: [...], games: [последние 30 матчей со статистикой] }. Нет аккаунта — null.
+// { player, lifetime, maps: [...], games: [последние 30 матчей со статистикой], more: [последние 100] }. Нет аккаунта — null.
 #[tauri::command]
 pub async fn faceit_profile(key: String, steamid: Option<String>, nickname: Option<String>) -> Result<Value, String> {
     const API: &str = "https://open.faceit.com/data/v4";
@@ -168,7 +168,9 @@ pub async fn faceit_profile(key: String, steamid: Option<String>, nickname: Opti
     let Some(player) = player else { return Ok(Value::Null) };
     let pid = player["player_id"].as_str().ok_or("FACEIT: нет player_id")?.to_string();
     let stats = fget(&key, &format!("{API}/players/{pid}/stats/cs2"))?.unwrap_or(Value::Null);
-    let games = fget(&key, &format!("{API}/players/{pid}/games/cs2/stats?offset=0&limit=30"))?.unwrap_or(Value::Null);
+    // 100 последних матчей: на форму и плитки идут 30 свежих, остальное — на рекорды и «приколы»
+    let games = fget(&key, &format!("{API}/players/{pid}/games/cs2/stats?offset=0&limit=100"))?.unwrap_or(Value::Null);
+    let all: Vec<Value> = games["items"].as_array().cloned().unwrap_or_default().into_iter().map(|g| g["stats"].clone()).collect();
     let cs2 = &player["games"]["cs2"];
     let maps: Vec<Value> = stats["segments"].as_array().cloned().unwrap_or_default().into_iter()
         .filter(|s| s["mode"].as_str().is_none_or(|m| m == "5v5"))
@@ -183,7 +185,8 @@ pub async fn faceit_profile(key: String, steamid: Option<String>, nickname: Opti
         },
         "lifetime": stats["lifetime"],
         "maps": maps,
-        "games": games["items"].as_array().cloned().unwrap_or_default().into_iter().map(|g| g["stats"].clone()).collect::<Vec<_>>(),
+        "games": all.iter().take(30).cloned().collect::<Vec<_>>(),
+        "more": all,
     }))
 }
 

@@ -229,6 +229,40 @@
 .pf-ach__more { margin-top: 12px; }
 .pf-ach__note { margin-top: 12px !important; font-size: .72rem; }
 
+/* кто ты в CS */
+.pf-type__main { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+.pf-type__icon { width: 58px; height: 58px; flex: none; display: grid; place-items: center; font-size: 1.9rem; border: 1px solid var(--line-hi); background: radial-gradient(circle at 50% 35%, rgba(46,230,192,.18), transparent 70%); animation: pf-pop .5s .3s cubic-bezier(.34,1.56,.64,1) both; }
+.pf-type__main div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pf-type__main b { font: 800 1.35rem/1.15 "Unbounded", sans-serif; color: #fff; }
+.pf-type__main span { font-size: .8rem; }
+.pf-parts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.pf-part { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.pf-part__bar { position: relative; width: 100%; max-width: 46px; height: 64px; background: rgba(255,255,255,.05); display: flex; align-items: flex-end; }
+.pf-part__bar i { display: block; width: 100%; background: linear-gradient(0deg, rgba(46,230,192,.35), var(--teal)); transform-origin: bottom; animation: pf-grow .8s .3s cubic-bezier(.2,.8,.2,1) both; }
+.pf-part.is-best .pf-part__bar i { background: linear-gradient(0deg, rgba(245,197,24,.35), var(--yellow)); }
+.pf-part b { color: #fff; font-size: .9rem; }
+.pf-part span:last-child { font-size: .72rem; color: var(--dim); white-space: nowrap; }
+.pf-type__note { margin-top: 12px; font: .74rem var(--mono); }
+
+/* рекорды */
+.pf-rec__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.pf-rec__item {
+  position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 12px 14px 12px 16px; min-width: 0;
+  background: rgba(0,0,0,.22); border: 1px solid var(--line); border-left: 3px solid var(--tint); color: var(--text); font: inherit; text-align: left; cursor: pointer;
+  animation: pf-in .4s calc(.1s + var(--i) * 40ms) cubic-bezier(.2,.8,.2,1) both; transition: transform .2s, border-color .2s, background-color .2s;
+}
+.pf-rec__item:hover { transform: translateY(-2px); background: rgba(255,255,255,.035); border-color: var(--line-hi); border-left-color: var(--tint); }
+.pf-rec__icon { position: absolute; right: 10px; top: 8px; font-size: 1.3rem; opacity: .85; }
+.pf-rec__label { font-size: .62rem; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); padding-right: 28px; }
+.pf-rec__value { font: 800 1.5rem/1.15 "Unbounded", sans-serif; color: #fff; font-variant-numeric: tabular-nums; }
+.pf-rec__item.is-bad .pf-rec__value { color: #ff8a8a; }
+.pf-rec__meta { font-size: .68rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+/* приколы */
+.pf-fun__list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 8px 18px; }
+.pf-fun__list li { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: .86rem; line-height: 1.4; animation: pf-in .4s calc(.1s + var(--i) * 35ms) cubic-bezier(.2,.8,.2,1) both; }
+.pf-fun__list li span { flex: none; width: 22px; text-align: center; font-size: 1rem; }
+
 /* загрузка */
 .pf-skel > div, .pf-skel .pf-tiles > div { background: linear-gradient(90deg, var(--panel) 0%, #121924 50%, var(--panel) 100%); background-size: 200% 100%; border: 1px solid var(--line); animation: pf-shimmer 1.2s linear infinite; }
 .pf-skel__hero { height: 230px; }
