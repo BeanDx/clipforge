@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { tr, trError, useLang } from "../../i18n";
 import { mapName, mapTint } from "../match/dossier";
+import { Rating } from "../match/Rating";
 import { editKills } from "../edit/montage";
 import { placeOf, roundless, modeName } from "./place";
 
@@ -112,7 +113,6 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
       listen("gsi-update", (e) => setHome((h) => (h ? { ...h, live: e.payload } : h))),
       listen("gsi-match-end", refresh),
       listen("gsi-session-end", refresh),
-      listen("gsi-mark", refresh),
     ];
     return () => uns.forEach((u) => u.then((f) => f()));
   }, []);
@@ -161,7 +161,7 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
   // кнопка у матча без демки: открыть комнату FACEIT / ждём файл
   const dlBtn = (f) => (waiting?.id === f.id
     ? <button type="button" className="hm-btn is-wait" onClick={() => setWaiting(null)} title={tr("Нажми на FACEIT «Watch demo» — clipforge сам заберёт файл из «Загрузок». Нажми, чтобы перестать ждать.")}>{tr("жду файл...")}</button>
-    : <button type="button" className="hm-btn is-go" onClick={() => download(f)} title={tr("Откроет матч на FACEIT: нажми там «Watch demo», а clipforge сам заберёт демку из «Загрузок»")}>{tr("скачать демку")}</button>);
+    : <button type="button" className="hm-btn" onClick={() => download(f)} title={tr("Откроет матч на FACEIT: нажми там «Watch demo», а clipforge сам заберёт демку из «Загрузок»")}>{tr("скачать демку")}</button>);
 
   // матчи Valve: по кнопке, а дальше сами при открытии главной (если CS2 закрыта и список устарел)
   const fetchValve = () => {
@@ -191,7 +191,7 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
   const vBtn = (v) => {
     const pr = vProg[v.id];
     if (pr) return <button type="button" className="hm-btn is-wait" disabled>{pr[1] ? tr("качаю {0}/{1} МБ", mb(pr[0]), mb(pr[1])) : tr("качаю...")}</button>;
-    return <button type="button" className="hm-btn is-go" disabled={!cs2} onClick={() => downloadValve(v)} title={tr("Скачает демку с серверов Valve прямо в папку повторов CS2")}>{tr("скачать демку")}</button>;
+    return <button type="button" className="hm-btn" disabled={!cs2} onClick={() => downloadValve(v)} title={tr("Скачает демку с серверов Valve прямо в папку повторов CS2")}>{tr("скачать демку")}</button>;
   };
   const vm = valve?.list || [];
 
@@ -232,13 +232,25 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
   // матч FACEIT не бывает матчем Valve
   const vOf = (m) => (fcOf(m) ? undefined : valveFor(m, vm));
   const demoOf = (m) => faceitDemo(fcOf(m), replays) || valveDemo(vOf(m), replays) || demoFor(m, replays);
-  const highlights = matches.flatMap((m) => m.rounds.filter((r) => r.tags?.length).map((r) => ({ m, r, demo: demoOf(m), f: fcOf(m), v: vOf(m) }))).slice(0, 12);
 
   // история: матчи из игры + скачанные демки, которых нет среди матчей
   // + матчи FACEIT и Valve, которых игра не записала (программа была закрыта)
   const shown = matches.filter((m) => !noise(m));
   const hidden = matches.length - shown.length;
-  const gsiRows = shown.map((m) => ({ t: m.started, m, f: fcOf(m), v: vOf(m), demo: demoOf(m) }));
+  // один матч FACEIT/Valve игра могла записать кусками (переподключился, перезапустил CS2):
+  // оставляем одну строку — самую длинную запись, моменты складываем со всех кусков
+  const gsiRows = [];
+  const parts = new Map();
+  for (const m of shown) {
+    const x = { t: m.started, m, f: fcOf(m), v: vOf(m), demo: demoOf(m), hl: m.rounds.filter((r) => r.tags?.length).length };
+    const id = x.f?.id || x.v?.id;
+    if (!id) gsiRows.push(x);
+    else parts.set(id, [...(parts.get(id) || []), x]);
+  }
+  for (const g of parts.values()) {
+    const main = g.reduce((a, b) => (b.m.rounds.length > a.m.rounds.length ? b : a));
+    gsiRows.push({ ...main, demo: main.demo || g.find((x) => x.demo)?.demo, hl: g.reduce((n, x) => n + x.hl, 0) });
+  }
   const fcLinked = new Set(gsiRows.map((x) => x.f?.id).filter(Boolean));
   const fcRows = fc.filter((f) => !fcLinked.has(f.id)).map((f) => ({ t: f.started, f, demo: faceitDemo(f, replays) }));
   const vLinked = new Set(gsiRows.map((x) => x.v?.id).filter(Boolean));
@@ -315,7 +327,6 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
             <span className={`hm-chip ${gsi === "ok" ? "is-ok" : gsi === "restart" ? "is-warn" : ""}`}>
               <i />{gsi === "restart" ? tr("перезапусти CS2, чтобы включить запись матчей") : gsi?.startsWith("error") ? tr("не получилось подключиться к CS2") : tr("связь с игрой включена")}
             </span>
-            <span className="hm-chip"><kbd>{live?.mark_key || "F8"}</kbd>{tr("в игре — запомнить момент")}</span>
             {place.hint && (
               <button type="button" className="hm-chip is-warn hm-chip--btn" title={tr("Steam → CS2 → Свойства → Параметры запуска: -condebug, потом перезапусти CS2")}
                 onClick={() => { navigator.clipboard?.writeText("-condebug").catch(() => {}); setCopied(true); setTimeout(() => setCopied(false), 2500); }}>
@@ -406,30 +417,6 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
           )}
         </section>
 
-        {/* хайлайты из игры */}
-        <section className="hm-card hm-hl span-2">
-          <header className="hm-card__head"><h2>{tr("Хайлайты из игры")}</h2><span className="mono dim">{tr("3K, 4K, эйс, все в голову, нож и клавиша {0}", live?.mark_key || "F8")}</span></header>
-          {highlights.length ? (
-            <div className="hm-hl__list">
-              {highlights.map(({ m, r, demo, f, v }, i) => (
-                <div key={`${m.id}:${r.round}`} className="hm-hl__item" style={{ "--tint": mapTint(m.map), "--i": i }}>
-                  <span className={`hm-hl__k ${r.kills >= 5 ? "is-ace" : r.kills >= 4 ? "is-4" : ""}`}>{r.kills >= 5 ? "ACE" : r.kills ? `${r.kills}K` : "★"}</span>
-                  <div className="hm-hl__body">
-                    <b>{mapName(m.map)} · R{r.round}</b>
-                    <span>{r.tags.map((t) => tr(t)).join(" · ")}</span>
-                    <span className="mono dim">{when(m.started)}</span>
-                  </div>
-                  {demo
-                    ? <button type="button" className="hm-btn is-go" onClick={() => onOpenEdit([demo.path])}>{tr("в эдит")}</button>
-                    : f ? dlBtn(f) : v?.url ? vBtn(v) : <span className="hm-hl__wait mono dim">{tr("скачай демку в «Смотреть»")}</span>}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="hm-empty">{tr("Играй как обычно: раунды с 3+ киллами, эйсы, ножи и все хедшоты отметятся сами, а {0} отметит любой момент. Когда демка матча скачается, эти раунды уже будут выбраны в «Эдите».", live?.mark_key || "F8")}</p>
-          )}
-        </section>
-
         {/* история игр */}
         <section className="hm-card hm-hist span-2">
           <header className="hm-card__head"><h2>{tr("История игр")}</h2><span className="hm-hist__meta">
@@ -458,25 +445,33 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
           {key.length < 32 && <p className="hm-note dim">{tr("Чтобы скачивать демки с FACEIT отсюда, укажи ключ FACEIT Data API в «Настройках».")}</p>}
           {rows.length ? (
             <div className="hm-rows">
-              {(() => { const histRow = ({ m, f, v, demo }) => {
+              {(() => { const histRow = ({ m, f, v, demo, hl = 0 }) => {
                 const s = demo && stats[`${demo.path}|${demo.size}`];
-                // без записи из игры: K/D из демки, а если её не разбирали — из данных Valve
-                const k = m ? m.kills : s ? s.kills : v?.kills, d = m ? m.deaths : s ? s.deaths : v?.deaths, hs = m ? m.hs : s?.hs;
+                const fs = f?.stats;
+                // У/С: итог матча с FACEIT, иначе запись из игры, демка или данные Valve
+                const k = fs ? fs.kills : m ? m.kills : s ? s.kills : v?.kills;
+                const d = fs ? fs.deaths : m ? m.deaths : s ? s.deaths : v?.deaths;
+                const hs = fs ? fs.hs : m ? m.hs : s?.hs;
                 const src = m || f || v || demo;
                 // новая карта, которую Valve не назвала: имя из демки
                 const map = (v && !v.map && demo?.map) || src.map;
-                const hl = m ? m.rounds.filter((r) => r.tags?.length).length : 0;
+                // итог платформы надёжнее записи из игры: та могла оборваться на переподключении
+                const ext = f?.result ? f : v?.result ? v : null;
+                const res = ext?.result || m?.result || (m && leftOf(m) ? "left" : "none");
+                const resText = ext ? fcRes(ext) : m ? resultOf(m) : f || v ? fcRes(f || v) : tr("демка");
+                const score = ext?.score || (m && (m.score_ct || m.score_t) ? (m.team === "CT" ? `${m.score_ct}:${m.score_t}` : `${m.score_t}:${m.score_ct}`) : (f || v)?.score || "");
+                const srcKind = f ? "fc" : v ? "valve" : "local";
+                const srcText = f ? "FACEIT" : v ? (v.mode === "wingman" ? tr("Valve · 2×2") : "Valve") : m?.server || (demo && !m ? tr("демка") : "");
                 return (
                   <div key={m?.id || f?.id || v?.id || demo.path} className="hm-row" style={{ "--tint": mapTint(map) }}>
-                    <span className="hm-row__map"><i /><span className="hm-row__name">{mapName(map) || "demo"}{m?.server && <small className="mono dim" title={m.server}>{m.server}</small>}</span>{f && <em className="hm-fc mono">FACEIT</em>}{!f && v && <em className="hm-fc hm-valve mono">{v.mode === "wingman" ? tr("2×2") : "VALVE"}</em>}</span>
-                    <span className="mono dim hm-row__when">{when(m ? m.started : f ? f.started : v ? v.started : demo.modified)}</span>
-                    <span className={`hm-res is-${m?.result || f?.result || v?.result || (m && leftOf(m) ? "left" : "none")}`} title={m && leftOf(m) ? tr(LEFT_HINT) : undefined}>
-                      {m ? (resultOf(m)) : f ? fcRes(f) : v ? fcRes(v) : tr("демка")}
-                      {m && (m.score_ct || m.score_t) ? <b className="mono"> {m.team === "CT" ? `${m.score_ct}:${m.score_t}` : `${m.score_t}:${m.score_ct}`}</b>
-                        : !m && (f || v)?.score ? <b className="mono"> {(f || v).score}</b> : null}
+                    <span className="hm-row__map"><i /><span className="hm-row__name"><b>{mapName(map) || "demo"}</b>{srcText && <small className={`hm-src is-${srcKind}`} title={m?.server || undefined}>{srcText}</small>}</span></span>
+                    <span className="mono hm-row__when">{when(m ? m.started : f ? f.started : v ? v.started : demo.modified)}</span>
+                    <span className={`hm-res is-${res}`} title={!ext && m && leftOf(m) ? tr(LEFT_HINT) : undefined}>
+                      <span>{resText}</span>{score && <b className="mono">{score}</b>}
                     </span>
-                    <span className="mono hm-row__kd">{k != null ? `${k}/${d ?? "?"}` : "—"}<em>{k && hs != null ? ` ${pct(hs, k)}% HS` : ""}</em></span>
-                    <span className="hm-row__hl">{hl ? <em>★ {hl}</em> : null}{s?.taps ? <em className="is-tap">{tr("тапов {0}", s.taps)}</em> : null}</span>
+                    <span className="hm-row__rt">{fs ? <Rating s={fs} /> : <span className="hm-nil">—</span>}</span>
+                    <span className="mono hm-row__kd">{k != null ? <><b>{k}</b><span className="hm-nil">/</span>{d ?? "?"}</> : <span className="hm-nil">—</span>}{k > 0 && hs != null ? <em>{pct(hs, k)}% HS</em> : null}</span>
+                    <span className="hm-row__hl mono">{hl ? <span className="hm-mom" title={tr("хайлайтов в матче")}>★ {hl}</span> : null}{s?.taps ? <span className="hm-mom is-tap">{tr("тапов {0}", s.taps)}</span> : null}</span>
                     <span className="hm-row__act">
                       {demo ? <button type="button" className="hm-btn" onClick={() => onOpenDemo(demo.path)}>{tr("открыть")}</button> : f ? dlBtn(f) : v?.url ? vBtn(v) : <span className="mono dim">{tr("нет демки")}</span>}
                       {demo && <button type="button" className="hm-btn is-go" onClick={() => onOpenEdit([demo.path])}>{tr("в эдит")}</button>}
@@ -487,6 +482,10 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
               // первые три всегда видны, остальные выезжают плавно (Collapse)
               return (
                 <>
+                  <div className="hm-row hm-row--head" aria-hidden="true">
+                    <span>{tr("Карта")}</span><span className="hm-row__when">{tr("Когда")}</span><span>{tr("Результат")}</span>
+                    <span className="hm-row__rt">{tr("Рейтинг")}</span><span className="hm-row__kd">{tr("У/С")}</span><span className="hm-row__hl">{tr("Моменты")}</span><span />
+                  </div>
                   {rows.slice(0, SHORT).map(histRow)}
                   <Collapse open={histOpen}><div className="hm-rows">{rows.slice(SHORT).map(histRow)}</div></Collapse>
                 </>

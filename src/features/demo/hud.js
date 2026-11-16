@@ -16,7 +16,10 @@ const PISTOL = /glock|usp|p2000|p250|five-seven|tec-9|cz75|berettas|desert eagle
 // Порядок слотов как в инвентаре CS2: основное, пистолет, нож, гранаты, бомба
 const slotOf = (w) => (/c4/i.test(w) ? 4 : NADE.test(w) ? 3 : KNIFE.test(w) ? 2 : PISTOL.test(w) ? 1 : 0);
 
-const stateKey = (s) => JSON.stringify([s.hp, s.armor, s.helmet, s.kit, s.money, s.weapon, s.clip, s.reserve, s.inv]);
+const stateKey = (s) => JSON.stringify([s.hp, s.armor, s.helmet, s.kit, s.money, s.weapon, s.clip, s.reserve, s.inv, s.top]);
+
+// цвета сторон как на табло CS2
+const CT = "#8fb6ea", TT = "#e6c271";
 
 // Склеивает соседние замеры с одинаковым видом HUD: из ~16 замеров в секунду обычно
 // остаются только моменты выстрелов, урона и смены оружия.
@@ -80,11 +83,73 @@ function bar(ctx, x, y, w, h, frac, color) {
   ctx.fillRect(x, y, w * Math.max(0, Math.min(1, frac)), h);
 }
 
-// Рисует один кадр HUD. Мёртвый игрок — пустой кадр: в матче HUD после смерти пропадает.
+const clock = (sec) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+
+// Табло сверху по центру, как в CS2: живые игроки и счёт CT слева, время раунда (таймер бомбы —
+// красным) и номер раунда в центре, счёт и живые T справа. Сторона игрока подчёркнута её цветом.
+function drawTop(ctx, top, W, k) {
+  const y = 14 * k, h = 46 * k;
+  const cw = 104 * k, sw = 62 * k; // центр (время) и ячейки счёта
+  const cx = W / 2;
+  ctx.save();
+  ctx.shadowBlur = 0;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  // подложка: тёмная плашка с мягкими краями
+  const total = cw + sw * 2;
+  const g = ctx.createLinearGradient(cx - total / 2 - 90 * k, 0, cx + total / 2 + 90 * k, 0);
+  g.addColorStop(0, "rgba(0,0,0,0)");
+  g.addColorStop(.22, "rgba(0,0,0,.5)");
+  g.addColorStop(.78, "rgba(0,0,0,.5)");
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(cx - total / 2 - 90 * k, y, total + 180 * k, h);
+  ctx.fillStyle = "rgba(10,12,16,.72)";
+  ctx.fillRect(cx - cw / 2, y, cw, h);
+
+  // счёт
+  const score = (val, color, x, mine) => {
+    ctx.fillStyle = color;
+    ctx.font = `700 ${34 * k}px ${FONT}`;
+    ctx.fillText(String(val), x, y + h / 2 + 2 * k);
+    if (mine) ctx.fillRect(x - 16 * k, y + h - 3 * k, 32 * k, 3 * k);
+  };
+  score(top.ct, CT, cx - cw / 2 - sw / 2, top.side === 3);
+  score(top.t, TT, cx + cw / 2 + sw / 2, top.side === 2);
+
+  // время раунда и номер раунда
+  if (top.time != null) {
+    ctx.fillStyle = top.bomb ? LOW : top.time <= 10 ? LOW : WHITE;
+    ctx.font = `700 ${25 * k}px ${FONT}`;
+    ctx.fillText(top.bomb ? `● ${clock(top.time)}` : clock(top.time), cx, y + h / 2 - 5 * k);
+  }
+  ctx.fillStyle = "rgba(242,242,242,.55)";
+  ctx.font = `600 ${12 * k}px ${FONT}`;
+  ctx.fillText(`ROUND ${top.round}`, cx, y + h - (top.time != null ? 9 : 23) * k);
+
+  // живые: полоски по 5 на сторону, от счёта наружу; погибшие — тусклые
+  const pip = (n, alive, color, x0, dir) => {
+    const pw = 7 * k, ph = 22 * k, gap = 5 * k;
+    for (let i = 0; i < n; i++) {
+      ctx.fillStyle = i < alive ? color : "rgba(242,242,242,.16)";
+      const x = x0 + dir * (i * (pw + gap)) - (dir < 0 ? pw : 0);
+      ctx.fillRect(x, y + (h - ph) / 2, pw, ph);
+    }
+  };
+  pip(top.ctN || 5, top.ctAlive, CT, cx - cw / 2 - sw - 6 * k, -1);
+  pip(top.tN || 5, top.tAlive, TT, cx + cw / 2 + sw + 6 * k, 1);
+  ctx.restore();
+}
+
+// Рисует один кадр HUD. Мёртвый игрок — без своей панели (в матче она после смерти пропадает),
+// табло сверху остаётся.
 export function drawHud(ctx, s, W, H) {
   ctx.clearRect(0, 0, W, H);
-  if (!s || s.hp <= 0) return;
+  if (!s) return;
   const k = Math.min(W, H) / 1080;
+  if (s.top) drawTop(ctx, s.top, W, k);
+  if (s.hp <= 0) return;
   const pad = 34 * k;
   const base = H - 30 * k; // базовая линия крупных цифр
   const mid = base - 18 * k; // центр иконок по высоте
@@ -188,14 +253,25 @@ const pngOf = (canvas) => new Promise((ok, fail) =>
   canvas.toBlob((b) => (b ? b.arrayBuffer().then((a) => ok(new Uint8Array(a)), fail) : fail(new Error("canvas.toBlob"))), "image/png"));
 
 // Рисует все кадры HUD клипа и отдаёт их в save(name, bytes); возвращает текст ffconcat.
-export async function renderHudFrames(samples, clipStart, W, H, save) {
-  const segs = hudSegments(samples, clipStart);
+// end — секунда конца самого клипа в записи: дальше идут повторы глазами жертв и реакция на спавне,
+// там HUD игрока не нужен. hide — отрезки [от, до] в секундах записи без HUD (облёт камеры).
+export async function renderHudFrames(samples, clipStart, W, H, save, { end = null, hide = [] } = {}) {
+  const raw = hudSegments(samples, clipStart);
+  const hidden = (t) => (end != null && t >= end) || hide.some(([a, b]) => t >= a && t < b);
+  const times = [...new Set([0, ...raw.map((x) => x.t), ...hide.flat(), ...(end != null ? [end] : [])])]
+    .filter((t) => t >= 0).sort((a, b) => a - b);
+  const segs = [];
+  for (const t of times) {
+    const cur = [...raw].reverse().find((x) => x.t <= t);
+    const seg = !cur || hidden(t) ? { key: "empty", state: null, t } : { ...cur, t };
+    if (segs.length && segs[segs.length - 1].key === seg.key) continue;
+    segs.push(seg);
+  }
   const canvas = document.createElement("canvas");
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext("2d");
   const cache = new Map(); // одинаковый вид HUD (например, вернулось то же оружие) — один файл
   let list = "ffconcat version 1.0\n";
-  if (!segs.length || segs[0].t > 0) segs.unshift({ key: "empty", state: null, t: 0 });
   for (let i = 0; i < segs.length; i++) {
     const s = segs[i];
     let name = cache.get(s.key);

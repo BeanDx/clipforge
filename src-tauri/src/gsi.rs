@@ -1,7 +1,7 @@
 // Живые данные из игры (Game State Integration — официальный механизм Valve, им пользуются
 // оверлеи стримеров; VAC это не трогает). CS2 сама шлёт сюда JSON о матче: карта, раунд, счёт,
 // киллы и хедшоты игрока за раунд, оружие. По ним программа ведёт историю матчей и сессий,
-// часы по дням и ставит закладки на хайлайты (3K, 4K, эйс, все в голову, нож, клавиша «запомни»).
+// часы по дням и ставит закладки на хайлайты (3K, 4K, эйс, все в голову, нож).
 // После матча — уведомление с хайлайтами, после закрытия игры — итог сессии.
 // Конфиг для игры (gamestate_integration_clipforge.cfg) кладёт gsi_install; читается при запуске CS2.
 use serde::{Deserialize, Serialize};
@@ -18,9 +18,6 @@ use tauri::{AppHandle, Emitter};
 
 const PORT: u16 = 31982;
 const TOKEN: &str = "clipforge-gsi";
-// клавиша «запомни этот момент» (системная: работает поверх игры в полноэкранном режиме)
-const MARK_KEY: u32 = 0x77; // F8
-const MARK_KEY_NAME: &str = "F8";
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct RoundRec {
@@ -92,7 +89,6 @@ struct Live {
     rhs: u32, // хедшоты в текущем раунде
     prev_rhs: u32, // round_killhs из прошлого сообщения: хедшоты за матч считаются по приросту
     rknife: bool,
-    rmarked: bool,
     last_kills: u32,
     weapon: String,
     prev_weapon: String, // оружие в прошлом сообщении: нож — только если он был в руках и до килла
@@ -122,8 +118,7 @@ fn with_history<R>(f: impl FnOnce(&mut History) -> R) -> R {
         // матчи без раундов из прошлых версий: «ничья» и «3K» за весь матч были ошибкой
         for m in h.matches.iter_mut().filter(|m| roundless(&m.mode)) {
             m.result.clear();
-            m.rounds.retain(|r| r.marked);
-            for r in &mut m.rounds { r.tags = vec!["закладка".into()]; }
+            m.rounds.clear();
         }
         // карты из мастерской попадали в статистику в прошлых версиях
         h.matches.retain(|m| !workshop_map(&m.map));
@@ -173,7 +168,7 @@ fn round_tags(r: &RoundRec) -> Vec<String> {
     t
 }
 
-// раунд закончился: в матч попадают раунды с киллами или с закладкой
+// раунд закончился: в матч попадают раунды с киллами
 // режимы без раундов: весь матч — один «раунд», и киллы в нём — это киллы за матч
 fn roundless(mode: &str) -> bool {
     matches!(mode, "deathmatch" | "gungameprogressive" | "gungametrbomb" | "armsrace")
@@ -182,14 +177,14 @@ fn roundless(mode: &str) -> bool {
 fn close_round(l: &mut Live) {
     let Some(m) = l.cur.as_mut() else { return };
     let flat = roundless(&m.mode);
-    // без раундов хайлайт — только закладка клавишей (3K за весь матч в DM — не хайлайт)
-    let keep = if flat { l.rmarked } else { l.rk > 0 || l.rmarked };
+    // без раундов хайлайтов нет (3K за весь матч в DM — не хайлайт)
+    let keep = !flat && l.rk > 0;
     if l.round_no > 0 && keep && !m.rounds.iter().any(|r| r.round == l.round_no) {
-        let mut r = RoundRec { round: l.round_no, kills: l.rk, hs: l.rhs, knife: l.rknife, marked: l.rmarked, tags: vec![] };
-        r.tags = if flat { vec!["закладка".into()] } else { round_tags(&r) };
+        let mut r = RoundRec { round: l.round_no, kills: l.rk, hs: l.rhs, knife: l.rknife, marked: false, tags: vec![] };
+        r.tags = round_tags(&r);
         m.rounds.push(r);
     }
-    l.rk = 0; l.rhs = 0; l.rknife = false; l.rmarked = false;
+    l.rk = 0; l.rhs = 0; l.rknife = false;
 }
 
 // Карта из мастерской: GSI называет её «workshop/<id>/<имя>»
@@ -319,7 +314,7 @@ fn handle(app: &AppHandle, v: Value) {
                 id: now.to_string(), map: map_name.into(), mode: s_str(&v, &["map", "mode"]).unwrap_or("").into(),
                 started: now, ..Default::default()
             });
-            l.round_no = 0; l.rk = 0; l.rhs = 0; l.prev_rhs = 0; l.rknife = false; l.rmarked = false; l.last_kills = 0;
+            l.round_no = 0; l.rk = 0; l.rhs = 0; l.prev_rhs = 0; l.rknife = false; l.last_kills = 0;
             l.src.clear(); l.src_name.clear();
         }
     }
@@ -509,7 +504,6 @@ pub struct LiveView {
     pub round_kills: u32,
     pub highlights: Vec<RoundRec>,
     pub session_started: Option<u64>,
-    pub mark_key: &'static str,
     // режим из игры: competitive, premier, deathmatch, casual, scrimcomp2v2…
     pub mode: String,
     // "menu" — в главном меню, "playing" — в матче
@@ -534,7 +528,6 @@ fn live_view(l: &Live) -> LiveView {
         round_kills: l.rk,
         highlights: m.map(|m| m.rounds.iter().filter(|r| !r.tags.is_empty()).cloned().collect()).unwrap_or_default(),
         session_started: l.session.as_ref().map(|s| s.started),
-        mark_key: MARK_KEY_NAME,
         mode: s_str(&l.live, &["map", "mode"]).unwrap_or("").into(),
         activity: s_str(&l.live, &["player", "activity"]).unwrap_or("").into(),
         server: if connected { server_now(l.session.as_ref().map(|s| s.started).unwrap_or(0)) } else { ServerInfo::default() },
@@ -566,36 +559,7 @@ fn serve(app: AppHandle, mut s: TcpStream) {
     }
 }
 
-// «Запомни этот момент»: системная клавиша, закладка на текущий раунд
-fn mark(app: &AppHandle) {
-    let mut g = LIVE.lock().unwrap();
-    let Some(l) = g.as_mut() else { return };
-    if l.cur.is_none() || l.round_no == 0 { return; }
-    l.rmarked = true;
-    let round = l.round_no;
-    let map = l.cur.as_ref().map(|m| map_title(&m.map)).unwrap_or_default();
-    let _ = app.emit("gsi-mark", round);
-    crate::toast::note(app, crate::toast::ToastNote {
-        tag: "clipforge · закладка".into(),
-        title: format!("Момент запомнен · R{round}"),
-        sub: format!("{map} · раунд попадёт в «Эдит», когда скачаешь демку"),
-        action: String::new(),
-    });
-}
-
-fn hotkey_thread(app: AppHandle) {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, MOD_NOREPEAT};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
-    thread::spawn(move || unsafe {
-        if RegisterHotKey(std::ptr::null_mut(), 1, MOD_NOREPEAT, MARK_KEY) == 0 { return; }
-        let mut msg: MSG = std::mem::zeroed();
-        while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
-            if msg.message == WM_HOTKEY { mark(&app); }
-        }
-    });
-}
-
-// Запуск при старте программы: приём сообщений игры, клавиша закладки, проверка конца сессии
+// Запуск при старте программы: приём сообщений игры и проверка конца сессии
 pub fn start(app: AppHandle) {
     let a = app.clone();
     thread::spawn(move || {
@@ -605,7 +569,6 @@ pub fn start(app: AppHandle) {
             thread::spawn(move || serve(a, s));
         }
     });
-    hotkey_thread(app.clone());
     // игра замолчала: закрыта — сессия кончилась сразу; открыта, но молчит дольше 40 с — «нет связи».
     // Последнее сообщение игры при закрытии не приходит, поэтому экран обновляем отсюда
     thread::spawn(move || {

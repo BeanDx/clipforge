@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { tr } from "../../i18n";
+import { FaceitTab } from "./FaceitTab";
 const MAPS = {
   de_dust2: "Dust II", de_mirage: "Mirage", de_inferno: "Inferno", de_nuke: "Nuke", de_ancient: "Ancient",
   de_anubis: "Anubis", de_vertigo: "Vertigo", de_overpass: "Overpass", de_train: "Train", de_italy: "Italy", de_office: "Office",
@@ -75,7 +76,7 @@ function Crosshair({ code }) {
 
 const SECTIONS = [["players", "Игроки"], ["facts", "Факты"], ["chat", "Чат"], ["server", "Сервер"]];
 
-export function MatchDossier({ info, busy, playerId, faceit, faceitErr, Hint, onPick, clipCount, onCard }) {
+export function MatchDossier({ info, busy, playerId, faceit, faceitErr, faceitKey, Hint, onPick, clipCount, onCard }) {
   const [sec, setSec] = useState("players");
   if (!info) {
     return <p className="empty dim">{busy ? tr("Разбираю матч по тикам...") : tr("Загрузи демку - здесь будет все, что из нее можно достать.")}</p>;
@@ -110,8 +111,8 @@ export function MatchDossier({ info, busy, playerId, faceit, faceitErr, Hint, on
       </div>
 
       <div className="dz-tabs" role="tablist">
-        {SECTIONS.map(([k, l]) => (
-          <button key={k} type="button" role="tab" aria-selected={sec === k} className={sec === k ? "is-on" : ""} onClick={() => setSec(k)}>
+        {[...SECTIONS, ...(info.faceitId ? [["faceit", "FACEIT"]] : [])].map(([k, l]) => (
+          <button key={k} type="button" role="tab" aria-selected={sec === k} className={`${sec === k ? "is-on" : ""} ${k === "faceit" ? "dz-tab--fc" : ""}`} onClick={() => setSec(k)}>
             {tr(l)}{k === "chat" && info.chat.length ? <span className="mono dim"> {info.chat.length}</span> : null}
           </button>
         ))}
@@ -193,6 +194,8 @@ export function MatchDossier({ info, busy, playerId, faceit, faceitErr, Hint, on
           </ul>
         ) : <p className="empty dim">{tr("В этом матче никто не писал в чат.")}</p>
       )}
+
+      {sec === "faceit" && <FaceitTab id={info.faceitId} faceitKey={faceitKey} playerId={playerId} info={info} />}
 
       {sec === "server" && (
         <div className="dz-server mono">

@@ -6,6 +6,10 @@ const STEP = 4; // 16 замеров в секунду — HUD меняется 
 const PROPS = ["health", "armor_value", "has_helmet", "has_defuser", "balance",
   "active_weapon_name", "active_weapon_ammo", "inventory"];
 
+// Табло сверху: время раунда (mp_roundtime 1:55 на FACEIT и в матчмейкинге) и таймер бомбы
+const ROUND_SECS = 115, BOMB_SECS = 40, TICKRATE = 64;
+const TOP_PROPS = ["team_num", "health", "team_rounds_total", "total_rounds_played"];
+
 // Запас патронов парсер не отдаёт (total_ammo_left всегда 0), поэтому считаем сами:
 // стандартный запас минус патроны, ушедшие на перезарядки с начала раунда.
 const RESERVE = {
@@ -21,6 +25,32 @@ try {
   const [file, steamid, rangesJson] = process.argv.slice(2);
   const ranges = JSON.parse(rangesJson);
   const freezeEnds = parseEvent(file, "round_freeze_end", [], []).map((e) => Number(e.tick)).sort((a, b) => a - b);
+  const ticksOf = (name) => { try { return parseEvent(file, name, [], []).map((e) => Number(e.tick)).sort((a, b) => a - b); } catch { return []; } };
+  const roundEnds = ticksOf("round_end").filter((t) => t > 1);
+  const plants = ticksOf("bomb_planted");
+  const lastBefore = (list, t) => { let r = null; for (const x of list) { if (x > t) break; r = x; } return r; };
+
+  // Табло на тик: счёт сторон, номер раунда, живые по сторонам, таймер (null — раунд кончился)
+  function topAt(rows, t, mySide) {
+    const side = (n) => rows.filter((r) => Number(r.team_num) === n);
+    const ct = side(3), tt = side(2);
+    if (!ct.length && !tt.length) return null;
+    const fe = lastBefore(freezeEnds, t), re = lastBefore(roundEnds, t), pl = lastBefore(plants, t);
+    let time = null, bomb = false;
+    if (fe != null && !(re != null && re >= fe)) {
+      if (pl != null && pl > fe) { bomb = true; time = BOMB_SECS - (t - pl) / TICKRATE; }
+      else time = ROUND_SECS - (t - fe) / TICKRATE;
+      time = Math.max(0, Math.ceil(time));
+    }
+    const any = rows[0] || {};
+    return {
+      ct: Number(ct[0]?.team_rounds_total ?? 0), t: Number(tt[0]?.team_rounds_total ?? 0),
+      round: Number(any.total_rounds_played ?? 0) + 1,
+      ctAlive: ct.filter((r) => (r.health ?? 0) > 0).length, tAlive: tt.filter((r) => (r.health ?? 0) > 0).length,
+      ctN: Math.min(5, ct.length), tN: Math.min(5, tt.length),
+      time, bomb, side: mySide,
+    };
+  }
 
   const out = ranges.map(([start, end]) => {
     // считаем с конца заморозки раунда, чтобы учесть перезарядки до начала клипа
@@ -31,6 +61,12 @@ try {
     const rows = parseTicks(file, PROPS, ticks, [steamid])
       .filter((r) => String(r.steamid) === String(steamid))
       .sort((a, b) => a.tick - b.tick);
+
+    // все игроки на тиках клипа — для табло сверху
+    let all = [];
+    try { all = parseTicks(file, TOP_PROPS, ticks.filter((t) => t >= start)); } catch { /* старая демка — без табло */ }
+    const byTick = new Map();
+    for (const r of all) { const k = Number(r.tick); if (!byTick.has(k)) byTick.set(k, []); byTick.get(k).push(r); }
 
     const reserve = {}, lastClip = {};
     const samples = [];
@@ -48,6 +84,9 @@ try {
         hp: r.health ?? 0, armor: r.armor_value ?? 0, helmet: !!r.has_helmet, kit: !!r.has_defuser,
         money: r.balance ?? 0, weapon: w, clip: w in RESERVE ? clip : null,
         reserve: w in RESERVE ? reserve[w] : null, inv: r.inventory ?? [],
+        top: byTick.has(Number(r.tick))
+          ? topAt(byTick.get(Number(r.tick)), Number(r.tick), Number(byTick.get(Number(r.tick)).find((p) => String(p.steamid) === String(steamid))?.team_num ?? 0))
+          : null,
       });
     }
     return samples;

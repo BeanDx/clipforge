@@ -270,8 +270,35 @@ export function Profile({ faceitKey, onGoSettings }) {
               </section>
             )}
 
-            {/* тип игрока и время суток (Records.jsx) */}
-            {games.length > 0 && <Records part="top" fc={f} />}
+            {/* слева столбиком: тип игрока и время суток (Records.jsx) и последние матчи, справа карты —
+                так колонки примерно равны по высоте и не остаётся пустого места */}
+            {games.length > 0 && (
+              <div className={`pf-col ${maps.length ? "" : "span-2"}`}>
+                <Records part="top" fc={f} />
+                {/* последние матчи */}
+                <section className="pf-card pf-last">
+                  <header className="pf-card__head"><h2>{tr("Последние матчи")}</h2><span className="mono dim">FACEIT</span></header>
+                  <div className="pf-rows">
+                    {[...games].reverse().slice(0, 10).map((g) => {
+                      const t = gameTime(g), d = t ? new Date(t) : null, win = g.Result === "1";
+                      const id = g["Match Id"];
+                      return (
+                        <button type="button" key={id || t} className={`pf-row ${win ? "is-win" : "is-loss"}`} style={{ "--tint": mapTint(mapId(g.Map)) }}
+                          onClick={() => id && open(`https://www.faceit.com/en/cs2/room/${id}`)} title={tr("открыть матч на FACEIT")}>
+                          <i className="pf-row__res">{win ? "W" : "L"}</i>
+                          <span className="pf-row__map">{mapName(mapId(g.Map))}</span>
+                          <span className="mono pf-row__score">{(g.Score || "").replace(/\s/g, "")}</span>
+                          <span className="mono">{g.Kills}-{g.Deaths}-{g.Assists}</span>
+                          <span className="mono pf-row__kd">{num(g["K/D Ratio"])?.toFixed(2) ?? "—"}</span>
+                          <span className="mono dim">{num(g.ADR) != null ? `${Math.round(num(g.ADR))} ADR` : ""}</span>
+                          <span className="mono dim pf-row__when">{d ? `${pad(d.getDate())}.${pad(d.getMonth() + 1)}` : ""}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              </div>
+            )}
 
             {/* карты */}
             {maps.length > 0 && (
@@ -291,31 +318,6 @@ export function Profile({ faceitKey, onGoSettings }) {
                       </div>
                     </div>
                   ))}
-                </div>
-              </section>
-            )}
-
-            {/* последние матчи */}
-            {games.length > 0 && (
-              <section className="pf-card pf-last">
-                <header className="pf-card__head"><h2>{tr("Последние матчи")}</h2><span className="mono dim">FACEIT</span></header>
-                <div className="pf-rows">
-                  {[...games].reverse().slice(0, 10).map((g) => {
-                    const t = gameTime(g), d = t ? new Date(t) : null, win = g.Result === "1";
-                    const id = g["Match Id"];
-                    return (
-                      <button type="button" key={id || t} className={`pf-row ${win ? "is-win" : "is-loss"}`} style={{ "--tint": mapTint(mapId(g.Map)) }}
-                        onClick={() => id && open(`https://www.faceit.com/en/cs2/room/${id}`)} title={tr("открыть матч на FACEIT")}>
-                        <i className="pf-row__res">{win ? "W" : "L"}</i>
-                        <span className="pf-row__map">{mapName(mapId(g.Map))}</span>
-                        <span className="mono pf-row__score">{(g.Score || "").replace(/\s/g, "")}</span>
-                        <span className="mono">{g.Kills}-{g.Deaths}-{g.Assists}</span>
-                        <span className="mono pf-row__kd">{num(g["K/D Ratio"])?.toFixed(2) ?? "—"}</span>
-                        <span className="mono dim">{num(g.ADR) != null ? `${Math.round(num(g.ADR))} ADR` : ""}</span>
-                        <span className="mono dim pf-row__when">{d ? `${pad(d.getDate())}.${pad(d.getMonth() + 1)}` : ""}</span>
-                      </button>
-                    );
-                  })}
                 </div>
               </section>
             )}

@@ -34,6 +34,11 @@ tauri-plugin-process = "2"
 tauri-plugin-single-instance = "2"
 bzip2 = "0.6"
 
+# Полная отладочная информация раздувает target/debug на десятки гигабайт;
+# номеров строк в паниках и стектрейсах достаточно
+[profile.dev]
+debug = "line-tables-only"
+
 # Парсер демок без оптимизаций разбирает 160-мегабайтную демку минутами — ускоряем и в dev
 [profile.dev.package.source2-demo]
 opt-level = 3

@@ -23,7 +23,7 @@ import { LiveStatus } from "./LiveStatus";
 import { RenderCounter } from "./RenderCounter";
 import { hitGlobalRenders } from "../features/profile/counter";
 import { NightEdit } from "../features/edit/NightEdit";
-import { OtherDemos } from "../features/reel/OtherDemos";
+import { ReelPanel } from "../features/reel/OtherDemos";
 import { loadReel, saveReel, reelEntry, entryVoice } from "../features/reel/reel";
 import { Home } from "../features/home/Home";
 import { Profile } from "../features/profile/Profile";
@@ -57,7 +57,7 @@ const STUDIO_TABS = [
   { id: "skins", label: "Скины", icon: "◆" },
 ];
 // версия формата досье: при изменении scripts/info.cjs старый кэш пересчитывается
-const INFO_V = 1;
+const INFO_V = 2;
 // клавиши, которыми в игре запускается запись (имя для bind в CS2, подпись)
 const START_KEYS = [["f10", "F10"], ["f9", "F9"], ["f8", "F8"], ["f7", "F7"], ["f6", "F6"], ["f11", "F11"], ["ins", "Insert"], ["home", "Home"], ["end", "End"], ["pgup", "Page Up"], ["pgdn", "Page Down"]];
 const VIDEO_DEFAULT = { aspect: "16:9", resId: "1920x1080", stretch: true };
@@ -110,18 +110,18 @@ const HUD_MODES = [
     help: "Прячет весь интерфейс, кроме килфида в правом верхнем углу. Чистый кадр для монтажа.",
     preview: <Shot src={shotHudMatch} ratio={CLEAN} crop><KillfeedRow /></Shot> },
   { id: "match", label: "HUD из матча",
-    help: "Интерфейс как у игрока в матче: деньги, здоровье, броня, патроны и оружие. Значения берутся из демки и меняются по ходу клипа, килфид остается игровым. Подстраивается под любой формат кадра.",
+    help: "Интерфейс как у игрока в матче: деньги, здоровье, броня, патроны и оружие, сверху табло со счетом, временем раунда и живыми игроками. Значения берутся из демки и меняются по ходу клипа, килфид остается игровым. На повторах глазами жертв HUD скрыт. Подстраивается под любой формат кадра.",
     preview: <HudZoom src={shotHudMatch} /> },
 ];
 
-// Атмосфера: цветокоррекция при сборке + (по желанию) туман и небо в самой игре
-const ATMOS = [
-  { id: "", label: "Как в игре", help: "Освещение и цвета карты без изменений." },
-  { id: "night", label: "Ночь", help: "Темная холодная картинка с синевой и виньеткой, темно-синее небо и туман вдали." },
-  { id: "fog", label: "Туман", help: "Густой серый туман: дальние планы тонут в дымке, цвета приглушены." },
-  { id: "sunset", label: "Закат", help: "Теплый оранжевый свет и розово-оранжевое небо, мягкая виньетка." },
-  { id: "neon", label: "Неон", help: "Фиолетово-розовые тени и сочные цвета, как в эдитах в стиле synthwave." },
-].map((a) => ({ ...a, preview: a.id && <Shot src={shotHudMatch} ratio={CLEAN} crop><span className={`pv-atmo pv-atmo--${a.id}`} /></Shot> }));
+// Настройки клипа (эффекты, камера, голоса, видео, тайминги) переживают рендер и перезапуск —
+// читаются один раз при старте, пишутся при каждом изменении (cf-clip)
+const FX_DEFAULT = { slowmo: false, damage: false, xray: false, hideDemoUi: true, hud: "full", camVictim: true, replayVoice: false, voiceTail: true, camOrbit: false, killFlash: false, flashColor: "pink", hsZoom: false, rtx: false, ultra: false };
+const SAVED_CLIP = (() => {
+  try { const v = JSON.parse(localStorage.getItem("cf-clip") || "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; }
+})();
+const savedOr = (k, def, ok = (v) => typeof v === typeof def) => (ok(SAVED_CLIP[k]) ? SAVED_CLIP[k] : def);
+const isObj = (v) => !!v && typeof v === "object";
 
 // «Реакция после раунда» на спавне следующего раунда: через сколько тиков после респавна начинается
 // (камера и модели успевают встать на место); длительность выбирается во вкладке «Звук» (tailSecs)
@@ -466,7 +466,7 @@ export default function HighlightRenderer() {
   const [players, setPlayers] = useState([]);
   const [playerId, setPlayerId] = useState(null);
   const [roster, setRoster] = useState([]);
-  const [voice, setVoice] = useState("none"); // none | all | team | enemy — по умолчанию без голосов
+  const [voice, setVoice] = useState(() => savedOr("voice", "none")); // none | all | team | enemy — по умолчанию без голосов
   const [studioTab, setStudioTab] = useState(() => { try { return localStorage.getItem("cf-studio") || "video"; } catch { return "video"; } });
   useEffect(() => { try { localStorage.setItem("cf-studio", studioTab); } catch {} }, [studioTab]);
   const [maxRound, setMaxRound] = useState(24);
@@ -582,20 +582,20 @@ export default function HighlightRenderer() {
   const [slots, setSlots] = useState({});
   const playerSlot = slots[playerId] ?? "";
 
-  const [fps, setFps] = useState(120);
-  const [blur, setBlur] = useState(true);
-  const [fov, setFov] = useState(90);
+  const [fps, setFps] = useState(() => savedOr("fps", 120));
+  const [blur, setBlur] = useState(() => savedOr("blur", true));
+  const [fov, setFov] = useState(() => savedOr("fov", 90));
   // формат видео по умолчанию (задаётся в «Настройках», переживает перезапуск) — с него стартует каждый клип
   const [videoDefault, setVideoDefault] = useState(() => {
     try { return { ...VIDEO_DEFAULT, ...JSON.parse(localStorage.getItem("cf-video-default") || "{}") }; } catch { return VIDEO_DEFAULT; }
   });
   useEffect(() => { try { localStorage.setItem("cf-video-default", JSON.stringify(videoDefault)); } catch {} }, [videoDefault]);
-  const [aspect, setAspect] = useState(videoDefault.aspect);
-  const [stretch, setStretch] = useState(videoDefault.stretch); // 4:3 — растягивать до 16:9 (как в игре)
+  const [aspect, setAspect] = useState(() => savedOr("aspect", videoDefault.aspect));
+  const [stretch, setStretch] = useState(() => savedOr("stretch", videoDefault.stretch)); // 4:3 — растягивать до 16:9 (как в игре)
   // несколько клипов — склеить в один ролик (по умолчанию да); выбор переживает перезапуск
   const [merge, setMerge] = useState(() => { try { return JSON.parse(localStorage.getItem("cf-merge") || "null") ?? { on: true, keep: false }; } catch { return { on: true, keep: false }; } });
   useEffect(() => { try { localStorage.setItem("cf-merge", JSON.stringify(merge)); } catch {} }, [merge]);
-  const [resId, setResId] = useState(videoDefault.resId);
+  const [resId, setResId] = useState(() => savedOr("resId", videoDefault.resId));
   // Выбор из других демок (src/features/reel): моменты, выбранные вручную в демке, которую потом
   // сменили. Они рендерятся вместе с выбранными в открытой демке — одним заданием, одним роликом.
   // Вернулся к той демке — её выбор снова на шкале, а из этого списка уходит. Переживает перезапуск.
@@ -618,12 +618,12 @@ export default function HighlightRenderer() {
     setVideoDefault(next);
     setAspect(next.aspect); setResId(next.resId); setStretch(next.stretch);
   };
-  const [trim, setTrim] = useState(true);
+  const [trim, setTrim] = useState(() => savedOr("trim", true));
   // вырезать беготню между киллами одного момента (src/features/demo/gaps.js)
   const [cutGaps, setCutGaps] = useState(() => { try { return localStorage.getItem("cf-cut-gaps") !== "0"; } catch { return true; } });
   useEffect(() => { try { localStorage.setItem("cf-cut-gaps", cutGaps ? "1" : "0"); } catch { /* без localStorage — только на сессию */ } }, [cutGaps]);
-  const [pad, setPad] = useState({ before: 1.5, after: 2 });
-  const [vm, setVm] = useState({ fov: 68, x: 2.5, y: 0, z: -1.5, bob: false });
+  const [pad, setPad] = useState(() => ({ before: 1.5, after: 2, ...savedOr("pad", {}, isObj) }));
+  const [vm, setVm] = useState(() => ({ fov: 68, x: 2.5, y: 0, z: -1.5, bob: false, ...savedOr("vm", {}, isObj) }));
   const [hurts, setHurts] = useState([]);
 
   // Свой трек и текст песни — по умолчанию выключено, настройки переживают перезапуск
@@ -647,7 +647,10 @@ export default function HighlightRenderer() {
     try { const v = Number(localStorage.getItem("cf-tail-secs")); return v >= TAIL_SECS.min && v <= TAIL_SECS.max ? v : TAIL_SECS.def; } catch { return TAIL_SECS.def; }
   });
   useEffect(() => { try { localStorage.setItem("cf-tail-secs", String(tailSecs)); } catch { /* только на сессию */ } }, [tailSecs]);
-  const [fx, setFx] = useState({ slowmo: false, damage: false, xray: false, hideDemoUi: true, hud: "full", camVictim: true, replayVoice: false, voiceTail: true, camOrbit: false, killFlash: false, flashColor: "pink", atmo: "", atmoGame: true, hsZoom: false, rtx: false, ultra: false });
+  const [fx, setFx] = useState(() => {
+    const { atmo, atmoGame, ...f } = savedOr("fx", {}, isObj); // eslint-disable-line no-unused-vars -- «Атмосфера» убрана
+    return { ...FX_DEFAULT, ...f };
+  });
 
   // ffmpeg: рядом с HLAE его может не быть (установщик HLAE ставит его отдельно, в zip-версии его нет) —
   // тогда программа сама скачивает свою копию (src-tauri/src/ffmpeg.rs). ffReady — путь, когда готов.
@@ -669,7 +672,7 @@ export default function HighlightRenderer() {
 
   // Аппаратный кодировщик ищем в том же ffmpeg: null — нет, undefined — ещё проверяем.
   const [gpuEnc, setGpuEnc] = useState(undefined);
-  const [useGpu, setUseGpu] = useState(true);
+  const [useGpu, setUseGpu] = useState(() => savedOr("useGpu", true));
   useEffect(() => {
     let alive = true;
     setGpuEnc(undefined);
@@ -679,6 +682,10 @@ export default function HighlightRenderer() {
       .catch(() => alive && setGpuEnc(null));
     return () => { alive = false; };
   }, [paths.hlae, ffReady]);
+
+  useEffect(() => {
+    try { localStorage.setItem("cf-clip", JSON.stringify({ fx, voice, fps, blur, fov, aspect, stretch, resId, trim, pad, vm, useGpu })); } catch { /* только на сессию */ }
+  }, [fx, voice, fps, blur, fov, aspect, stretch, resId, trim, pad, vm, useGpu]);
 
   const resOptions = useMemo(() => RESOLUTIONS.filter((r) => r.ratio === aspect), [aspect]);
   const res = resOptions.find((r) => r.id === resId) ?? resOptions[0];
@@ -1010,7 +1017,7 @@ const voicePayload = useMemo(() => {
       ...live, voice: "none", trim: true, pad: { before: 1.5, after: 2 }, cutGaps: false, fps: 60, blur: false, merge: { on: false, keep: false },
       music: { ...live.music, enabled: false },
       fx: { ...live.fx, slowmo: false, damage: false, xray: false, camVictim: false, replayVoice: false, voiceTail: false,
-        camOrbit: false, killFlash: false, atmo: "", hsZoom: false, rtx: false, ultra: false },
+        camOrbit: false, killFlash: false, hsZoom: false, rtx: false, ultra: false },
     } : live;
     const rl = !o && list ? list : null;
     if (rl && !rl.length) return;
@@ -1025,7 +1032,7 @@ const voicePayload = useMemo(() => {
     const sidOf = (c) => (rl ? c.steamid : pid);
     // кусок эдита: HUD всегда полный (как в TikTok-эдитах), без своих повторов и замедлений —
     // ритм делает монтаж
-    const fxJob = o ? { ...fx, slowmo: false, camVictim: false, camOrbit: false, hsZoom: false, killFlash: false, atmo: "", hud: "full", xray: false } : fx;
+    const fxJob = o ? { ...fx, slowmo: false, camVictim: false, camOrbit: false, hsZoom: false, killFlash: false, hud: "full", xray: false } : fx;
     // «Мега-качество» — только у клипов (у эдита своя кино-графика): запись в 2 раза больше, итог чуть качественнее
     const ultraOn = !o && !!fx.rtx && !!fx.ultra;
     const { width, height } = res;
@@ -1126,22 +1133,6 @@ const voicePayload = useMemo(() => {
         await invoke("close_cs2");
         setStage("");
       }
-      if (fxJob.hud === "match") {
-        // Кадры HUD готовим заранее: по одной папке hud_N на клип внутри временной папки рендера
-        setStage(tr("готовлю HUD..."));
-        const states = await perDemo(sel, demoOf, sidOf, async (path, steamid, cl) => JSON.parse(await invoke("parse_hud", {
-          path, steamid, ranges: JSON.stringify(cl.map((c) => [c.start, c.end])),
-        })));
-        await fontsReady();
-        const work = await join(paths.out, ".clipforge_tmp", stamp);
-        for (let i = 0; i < sel.length; i++) {
-          stopped();
-          const dir = await join(work, `hud_${i}`);
-          const save = (name, bytes) => invoke("save_file", bytes, { headers: { "x-path": encodeURIComponent(`${dir}\\${name}`) } });
-          const list = await renderHudFrames(states[i] || [], sel[i].start, width, height, save);
-          await save("hud.ffconcat", new TextEncoder().encode(list));
-        }
-      }
       // кинокамера: повтор глазами каждой жертвы клипа (по очереди после клипа) и облёт на последнем фраге.
       // Повторы нужны и при пересборке без игры — по ним считается длина клипа (они уже есть в записи).
       // облёт «реакции после раунда» на спавне — часть записи, при пересборке без игры не нужен
@@ -1181,6 +1172,27 @@ const voicePayload = useMemo(() => {
           c.cine = { kill, victimSlot: victims.at(-1)?.slot ?? null, victims, orbitXml: orbit?.xml ?? null, orbitEnd: orbit?.end ?? null };
         });
         stopped();
+      }
+      // HUD из матча: после кинокамеры — облёт должен быть уже известен
+      if (fxJob.hud === "match") {
+        // Кадры HUD готовим заранее: по одной папке hud_N на клип внутри временной папки рендера
+        setStage(tr("готовлю HUD..."));
+        const states = await perDemo(sel, demoOf, sidOf, async (path, steamid, cl) => JSON.parse(await invoke("parse_hud", {
+          path, steamid, ranges: JSON.stringify(cl.map((c) => [c.start, c.end])),
+        })));
+        await fontsReady();
+        const work = await join(paths.out, ".clipforge_tmp", stamp);
+        for (let i = 0; i < sel.length; i++) {
+          stopped();
+          const dir = await join(work, `hud_${i}`);
+          const save = (name, bytes) => invoke("save_file", bytes, { headers: { "x-path": encodeURIComponent(`${dir}\\${name}`) } });
+          // после клипа в записи идут повторы глазами жертв и реакция на спавне — там HUD игрока нет;
+          // на облёте камеры его тоже прячем (игровой HUD в это время выключен)
+          const c = sel[i], sec = (t) => (t - c.start) / 64;
+          const orbit = c.cine?.orbitXml && c.cine.orbitEnd != null ? [[sec(c.cine.kill + 6), sec(Math.min(c.cine.orbitEnd, c.end - 2))]] : [];
+          const list = await renderHudFrames(states[i] || [], c.start, width, height, save, { end: sec(c.end), hide: orbit });
+          await save("hud.ffconcat", new TextEncoder().encode(list));
+        }
       }
       // Клипы склеиваются в один ролик — песня идёт через них подряд, без перескоков назад
       // (длина клипа известна только теперь: в неё входят повторы глазами жертв)
@@ -1327,7 +1339,7 @@ const voicePayload = useMemo(() => {
   const skinCount = Object.keys(skinPlan.weapons || {}).length + (skinPlan.knife ? 1 : 0) + (skinPlan.gloves ? 1 : 0);
   const studioSummary = {
     video: `${res.label} · ${aspect} · ${fps} fps${blur ? " · blur" : ""}`,
-    effects: onList([[fx.rtx && !fx.ultra, tr("кино-графика")], [fx.rtx && fx.ultra, tr("мега-качество")], [fx.slowmo, "slow-mo"], [fx.damage, tr("урон")], [fx.killFlash, tr("вспышка")], [fx.hsZoom, tr("зум на HS")], [!!fx.atmo, tr(ATMOS.find((a) => a.id === fx.atmo)?.label ?? "").toLowerCase()], [fx.xray, "x-ray"], [fx.hud !== "full", fx.hud === "match" ? tr("HUD матча") : tr("килфид")]], tr("без эффектов")),
+    effects: onList([[fx.rtx && !fx.ultra, tr("кино-графика")], [fx.rtx && fx.ultra, tr("мега-качество")], [fx.slowmo, "slow-mo"], [fx.damage, tr("урон")], [fx.killFlash, tr("вспышка")], [fx.hsZoom, tr("зум на HS")], [fx.xray, "x-ray"], [fx.hud !== "full", fx.hud === "match" ? tr("HUD матча") : tr("килфид")]], tr("без эффектов")),
     camera: onList([[fx.camVictim, tr("повтор")], [fx.camOrbit, tr("облет")]], tr("обычная")),
     sound: onList([[voice !== "none", tr("голоса: {0}", tr(VOICE_MODES.find(([k]) => k === voice)?.[1] ?? "").toLowerCase())], [music.enabled && music.path, tr("трек")], [music.enabled && music.path && music.beatFx, tr("в такт")]], tr("звук игры")),
     skins: skinCount ? tr("изменено: {0}", skinCount) : tr("как в демке"),
@@ -1499,22 +1511,6 @@ const voicePayload = useMemo(() => {
                   {tr(m.label)}{m.soon && <em className="soon">{tr("скоро")}</em>}<Hint text={tr(m.help)} preview={m.preview} />
                 </button>
               ))}
-            </div>
-            <hr className="sep" />
-            <span className="mono dim sub">{tr("атмосфера")}<Hint text={tr("Время суток и погода. Цвет и свет меняются при сборке клипа, поэтому работает и \"Пересобрать без игры\".")} /></span>
-            <div className="ratios atmos" role="radiogroup" aria-label={tr("Атмосфера")}>
-              {ATMOS.map((a) => (
-                <button key={a.id || "off"} type="button" role="radio" aria-checked={fx.atmo === a.id}
-                  className={`atmo-btn atmo-btn--${a.id || "off"} ${fx.atmo === a.id ? "is-on" : ""}`}
-                  onClick={() => setFx({ ...fx, atmo: a.id })}>
-                  <i />{tr(a.label)}<Hint text={tr(a.help)} preview={a.preview} />
-                </button>
-              ))}
-            </div>
-            <div className={`mu-sub ${fx.atmo ? "is-open" : ""}`}>
-              <Toggle label={tr("Туман и небо в самой игре")} hint={tr("Экспериментально · fog_override и mirv_sky во время записи")}
-                checked={fx.atmoGame} disabled={!fx.atmo} onChange={(v) => setFx({ ...fx, atmoGame: v })}
-                help={tr("Кроме цветокоррекции, во время записи в CS2 включается туман нужного цвета, а небо и облака перекрашиваются через HLAE. Так дальние планы правда тонут в тумане. Если туман в клипе выглядит странно - выключи, останется только цветокоррекция.")} />
             </div>
           </>
         )}
@@ -1725,7 +1721,7 @@ const voicePayload = useMemo(() => {
                     </div>
                     {archiveOpen === d.path && (
                       <div className="archive__dz">
-                        <MatchDossier info={cachedInfo(d.path)} faceit={cachedInfo(d.path)?.faceit} Hint={Hint} />
+                        <MatchDossier info={cachedInfo(d.path)} faceit={cachedInfo(d.path)?.faceit} faceitKey={faceitKey} Hint={Hint} />
                       </div>
                     )}
                   </li>
@@ -1863,22 +1859,18 @@ const voicePayload = useMemo(() => {
             </div>
           </Frame>
 
+          {/* мастер и сброс — в одном блоке справа от «О приложении», по строке на действие */}
           <Frame title={tr("Мастер настройки")} meta={tr("игра · запись · тест")}>
-            <p className="dim" style={{ margin: 0 }}>
-              {tr("Пройти первую настройку заново: найти CS2, проверить HLAE и папку, записать тестовые 5 секунд.")}
-            </p>
-            <button type="button" className="go go--ghost" disabled={rendering} onClick={() => setSetupOpen(true)}>
-              {tr("Открыть мастер")}
-            </button>
-          </Frame>
-
-          <Frame title={tr("Сброс")} meta={tr("локальные настройки")}>
-            <p className="dim" style={{ margin: 0 }}>
-              {tr("Вернуть пути к HLAE, CS2 и папке вывода к значениям по умолчанию.")}
-            </p>
-            <button type="button" className="go go--ghost" onClick={resetPaths}>
-              {tr("Сбросить пути")}
-            </button>
+            <div className="about svc">
+              <div className="about__row">
+                <span className="dim">{tr("Пройти первую настройку заново: найти CS2, проверить HLAE и папку, записать тестовые 5 секунд.")}</span>
+                <button type="button" className="chip svc__btn" disabled={rendering} onClick={() => setSetupOpen(true)}>{tr("Открыть мастер")}</button>
+              </div>
+              <div className="about__row">
+                <span className="dim">{tr("Вернуть пути к HLAE, CS2 и папке вывода к значениям по умолчанию.")}</span>
+                <button type="button" className="chip svc__btn" onClick={resetPaths}>{tr("Сбросить пути")}</button>
+              </div>
+            </div>
           </Frame>
 
           <RenderCounter Frame={Frame} />
@@ -1901,6 +1893,7 @@ const voicePayload = useMemo(() => {
                     {info && `${mapName(info.map)} · ${info.teams?.map((t) => t.score).join(":") || ""} · `}
                     {fmtSize(demo.size)} · {players.length} {tr("игроков ·")} {clips.length} {tr("моментов")}
                   </span>
+                  <span className="drop__hint mono">{tr("нажми или перетащи файл, чтобы открыть другую демку")}</span>
                 </div>
               ) : (
                 <div className="drop__empty">
@@ -1916,14 +1909,14 @@ const voicePayload = useMemo(() => {
           {demo && (
             <Frame title={tr("Досье матча")} meta={infoBusy ? tr("разбираю...") : info ? tr("{0} игроков · {1} киллов", info.players.length, info.facts?.kills ?? 0) : ""} className="span-2"
               help={tr("Все, что можно вытащить из демки сверх обычного: прицелы игроков, точность, контрстрейф, время до убийства, пробежка, чат, настройки сервера. Уровни FACEIT - если в \"Настройках\" указан ключ API.")}>
-              <MatchDossier info={info} busy={infoBusy} playerId={playerId} faceit={faceit} faceitErr={faceitErr} Hint={Hint}
+              <MatchDossier info={info} busy={infoBusy} playerId={playerId} faceit={faceit} faceitErr={faceitErr} faceitKey={faceitKey} Hint={Hint}
                 clipCount={clipCount} onPick={(id) => players.some((p) => p.id === id) && setPlayerId(id)}
                 onCard={() => makeCard()} />
             </Frame>
           )}
 
           <Frame title={tr("Анализ матча")} meta={tr("{0} событий", events.length)} className="span-2"
-            help={tr("Кликай по моментам, чтобы выбрать их для рендера. Можно собрать ролик из нескольких матчей: выбери моменты здесь, открой другую демку и выбери там - в рендер попадет все выбранное из всех демок.")}>
+            help={tr("Кликай по моментам, чтобы выбрать их для рендера. Ролик можно собрать из нескольких матчей: ниже в блоке \"Ролик\" нажми \"+ моменты из другой демки\" и выбери моменты там - в рендер попадет все выбранное из всех демок.")}>
             {/* игрок выбирается кликом по нику в «Досье матча»; пока досье считается — здесь */}
             {players.length > 0 && !info && (
               <div className="players" role="radiogroup" aria-label={tr("Игрок")}>
@@ -2019,9 +2012,18 @@ const voicePayload = useMemo(() => {
             )}
           </Frame>
 
-          {others.length > 0 && (
-            <OtherDemos list={others} rendering={rendering} onOpen={loadPath}
-              onRemove={(path) => setReel((l) => l.filter((e) => e.demo !== path))} onClear={() => setReel([])} />
+          {(demo || others.length > 0) && (
+            <ReelPanel archive={archive} mine={mine} others={others} busy={rendering || parsing}
+              current={demo && {
+                path: demo.path, title: demoTitle,
+                map: info?.map || cachedInfo(demo.path)?.map || archive.find((d) => d.path === demo.path)?.info?.map,
+              }}
+              // явное «добавить из другой демки»: выбор открытой уходит в ролик, даже если это автовыбор
+              onAdd={(path) => { touchedRef.current = true; loadPath(path); }}
+              onPickFile={() => { touchedRef.current = true; pickFile(); }}
+              onOpen={loadPath}
+              onRemove={(path) => setReel((l) => l.filter((e) => e.demo !== path))}
+              onClear={() => setReel((l) => l.filter((e) => e.demo === demo?.path))} />
           )}
 
           {renderStudio()}

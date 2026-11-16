@@ -18,3 +18,23 @@
 .xdemo__moments .tag { font-size: .7rem; }
 .xdemo__x { padding: 5px 9px; }
 .chip--del:disabled, .xdemo .chip:disabled { opacity: .45; cursor: default; }
+.xdemo__list li.is-current { border-color: rgba(46,230,192,.45); }
+.xdemo__badge { font-size: .7rem; color: var(--teal); padding: 3px 8px; border: 1px solid rgba(46,230,192,.45); }
+.xdemo__add { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.chip--add { color: var(--teal); border-color: rgba(46,230,192,.55); font-weight: 600; }
+.chip--add.is-on { background: rgba(46,230,192,.12); }
+.xdemo__pick {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px;
+  animation: tab-in .25s var(--ease) both;
+}
+.xdemo__pick button {
+  width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px;
+  text-align: left; color: inherit; cursor: pointer;
+  border: 1px solid var(--line); border-left: 3px solid var(--map, var(--line)); background: var(--panel);
+  transition: border-color .15s, background .15s;
+}
+.xdemo__pick button:hover:not(:disabled) { border-color: rgba(46,230,192,.55); background: rgba(46,230,192,.06); }
+.xdemo__pick button:disabled { opacity: .45; cursor: default; }
+.xdemo__pick span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8rem; }
+.xdemo__file { justify-content: center; border-style: dashed !important; }

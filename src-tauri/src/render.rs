@@ -159,11 +159,6 @@ pub struct Job {
     kill_flash: bool,
     #[serde(default)]
     flash_color: String,
-    // атмосфера: "night" | "fog" | "sunset" | "neon" ("" — как в игре); atmo_game — менять ещё и туман/небо в самой игре
-    #[serde(default)]
-    atmo: String,
-    #[serde(default)]
-    atmo_game: bool,
     // наезд камеры на цель при килле в голову
     #[serde(default)]
     hs_zoom: bool,
@@ -277,36 +272,6 @@ fn group_runs(info: &[(Option<u32>, u32, usize)]) -> Vec<std::ops::Range<usize>>
         }
     }
     runs
-}
-
-// Цветокоррекция атмосферы при сборке клипа — работает всегда, даже если игра не приняла команды тумана
-fn atmo_grade(a: &str) -> Option<&'static str> {
-    Some(match a {
-        "night" => "eq=brightness=-0.05:contrast=1.15:saturation=0.6:gamma=0.75,\
-                    colorbalance=rs=-0.12:gs=-0.03:bs=0.16:rm=-0.08:bm=0.12:rh=-0.05:bh=0.08,vignette=angle=PI/4",
-        "fog" => "curves=all='0/0.18 0.5/0.56 1/0.94',eq=saturation=0.55,colorbalance=bs=0.03:bm=0.02",
-        "sunset" => "colorbalance=rs=0.12:gs=0.01:bs=-0.12:rm=0.10:gm=-0.01:bm=-0.10:rh=0.05:bh=-0.08,\
-                     eq=saturation=1.15:contrast=1.06:gamma=0.95,vignette=angle=PI/5",
-        "neon" => "colorbalance=rs=0.15:gs=-0.12:bs=0.25:rm=0.12:gm=-0.12:bm=0.08:rh=0.06:gh=-0.04:bh=0.10,\
-                   eq=saturation=1.4:contrast=1.18:gamma=0.8,vignette=angle=PI/4.5",
-        _ => return None,
-    })
-}
-
-// Туман и небо в самой игре: fog_override_* (нужен sv_cheats) и mirv_sky из HLAE.
-// (цвет тумана, начало, конец, плотность, цвет неба, цвет облаков)
-fn atmo_cmds(a: &str) -> String {
-    let (fog, start, end, dens, sky, clouds) = match a {
-        "night" => ("18 26 54", 200, 2600, 0.55, "14 20 44", "40 48 80"),
-        "fog" => ("160 168 176", 0, 1400, 0.9, "150 158 166", "170 175 180"),
-        "sunset" => ("200 110 60", 300, 4000, 0.45, "255 130 70", "255 170 120"),
-        "neon" => ("90 30 140", 300, 3000, 0.5, "120 40 180", "255 80 200"),
-        _ => return String::new(),
-    };
-    format!(
-        "sv_cheats 1\nfog_override_enable 1\nfog_override 1\nfog_override_color {fog}\nfog_override_start {start}\n\
-         fog_override_end {end}\nfog_override_max_density {dens}\nmirv_sky color {sky} 255\nmirv_sky clouds color {clouds}\n"
-    )
 }
 
 // Сырая запись последнего рендера (take-папки) хранится в <out>/.clipforge_last вместе с этим
@@ -625,8 +590,6 @@ fn post_filter(j: &Job, cl: &Clip, has_audio: bool, rubberband: bool, hud: Optio
         cur = "vu";
     }
     if j.blur { head += &format!("[{cur}]tmix=frames=3[vb];"); cur = "vb"; }
-    // атмосфера — до своего HUD, чтобы его цифры оставались чистыми
-    if let Some(gr) = atmo_grade(&j.atmo) { head += &format!("[{cur}]{gr}[vg];"); cur = "vg"; }
     if let Some(idx) = hud {
         head += &format!("[{cur}][{idx}:v]overlay=0:0:format=auto[vh];");
         cur = "vh";
@@ -864,8 +827,6 @@ fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, Str
     per_demo += &format!("cl_draw_only_deathnotices {}\n", (j.hud == "killfeed" || j.hud == "match") as u8);
     // demoui — переключатель: панель открыта при старте демки, одна команда её закрывает.
     if j.hide_demo_ui { per_demo += "demoui\n"; }
-    // карта уже загружена — mirv_sky для облаков нужно применять после загрузки
-    if j.atmo_game { per_demo += &atmo_cmds(&j.atmo); }
     c += &per_demo;
     // Несколько демок в одном задании (эдит): клипы идут подряд по демкам. Конец последнего клипа
     // демки очищает расписание, ставит расписание клипов следующей и сам открывает её (playdemo) —

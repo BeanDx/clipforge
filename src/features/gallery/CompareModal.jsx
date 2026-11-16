@@ -43,6 +43,9 @@ export function CompareModal({ hlae, list, onClose }) {
   const [t, setT] = useState(0);
   const [cut, setCut] = useState(50);
   const [drag, setDrag] = useState(false);
+  // пропорции готового клипа: сырая запись в растянутом 4:3 тянется под них же, иначе по бокам «до»
+  // остаются полосы, сквозь которые видно «после»
+  const [ar, setAr] = useState(16 / 9);
   const boxRef = useRef(null);
   const item = list[idx];
   const tIn = item ? toIn(item.segs, t) : 0;
@@ -79,11 +82,12 @@ export function CompareModal({ hlae, list, onClose }) {
           <button type="button" className="chip" onClick={onClose}>{tr("Закрыть")}</button>
         </div>
 
-        <div ref={boxRef} className={`cmp__view ${drag ? "is-drag" : ""}`}
+        <div ref={boxRef} className={`cmp__view ${drag ? "is-drag" : ""}`} style={{ aspectRatio: ar }}
           onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); setDrag(true); moveCut(e); }}
           onPointerMove={(e) => drag && moveCut(e)}
           onPointerUp={() => setDrag(false)}>
-          {after ? <img src={after} alt={tr("После")} draggable={false} /> : <span className="cmp__wait mono dim">{tr("достаю кадр...")}</span>}
+          {after ? <img src={after} alt={tr("После")} draggable={false}
+            onLoad={(e) => { const { naturalWidth: w, naturalHeight: h } = e.currentTarget; if (w && h) setAr(w / h); }} /> : <span className="cmp__wait mono dim">{tr("достаю кадр...")}</span>}
           {before && <img src={before} alt={tr("До")} draggable={false} className="cmp__before" style={{ clipPath: `inset(0 ${100 - cut}% 0 0)` }} />}
           <span className="cmp__tag cmp__tag--l mono">{tr("до · демка")}</span>
           <span className="cmp__tag cmp__tag--r mono">{tr("после · clipforge")}</span>

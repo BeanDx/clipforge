@@ -149,6 +149,119 @@ try {
   }
   const rounds = [...teams.values()].reduce((s, t) => s + t.score, 0) || roundFirst.size || 1;
 
+  // ── продвинутая статистика по раундам: входы, размены, клатчи 1vN, KAST, дуэли, гранаты ──
+  const adv = advanced();
+  function advanced() {
+    const roundEnds = live(safe(() => parseEvent(file, "round_end", [], []), [])).filter((e) => e.winner === "CT" || e.winner === "T");
+    if (!roundEnds.length) return null;
+    const fes = freezeEnds.filter((t) => t >= startTick);
+    // кто в какой команде и жив на старте каждого раунда
+    const rosters = new Map();
+    safe(() => parseTicks(file, ["team_num", "is_alive"], fes), []).forEach((t) => {
+      if (t.team_num !== 2 && t.team_num !== 3) return;
+      if (!rosters.has(t.tick)) rosters.set(t.tick, new Map());
+      rosters.get(t.tick).set(String(t.steamid), t.team_num);
+    });
+    const A = new Map();
+    const st = (id) => {
+      id = String(id);
+      if (!A.has(id)) A.set(id, { entryK: 0, entryD: 0, entryTraded: 0, tradeK: 0, tradedD: 0, kastRounds: 0, rounds: 0,
+        clutch: { 1: [0, 0], 2: [0, 0], 3: [0, 0], 4: [0, 0], 5: [0, 0] },
+        nades: { he: 0, flash: 0, smoke: 0, molly: 0, decoy: 0 }, heDmg: 0, fireDmg: 0,
+        flashEnemies: 0, flashEnemySec: 0, flashTeam: 0, flashTeamSec: 0 });
+      return A.get(id);
+    };
+    const duels = {}; // duels[a][v] = { k, dmg, ek, tk }
+    const duel = (a, v) => ((duels[a] ??= {})[v] ??= { k: 0, dmg: 0, ek: 0, tk: 0 });
+    const TRADE = 5 * TICK;
+
+    const enemyKill = (d) => d.attacker_steamid && String(d.attacker_steamid) !== "0" && d.attacker_steamid !== d.user_steamid && d.attacker_team_num !== d.user_team_num;
+    // дуэли — по всем киллам матча, включая добивания после конца раунда
+    for (const d of deaths) if (enemyKill(d)) duel(String(d.attacker_steamid), String(d.user_steamid)).k++;
+
+    let from = startTick;
+    for (const end of roundEnds) {
+      // раунд — от конца фризтайма до конца раунда: смерти между раундами (взрыв, добивания) входом не считаются
+      const fe = fes.filter((t) => t >= from && t <= end.tick).pop();
+      from = end.tick;
+      const roster = fe != null ? rosters.get(fe) : null;
+      if (!roster) continue;
+      const rd = deaths.filter((d) => d.tick >= fe && d.tick <= end.tick && d.user_steamid).sort((a, b) => a.tick - b.tick);
+      const firstKill = rd.find(enemyKill);
+      const alive = { 2: new Set(), 3: new Set() };
+      roster.forEach((team, id) => alive[team].add(id));
+      const contrib = new Set(); // KAST: килл, ассист, выжил или разменян
+      const clutched = new Set();
+      const checkClutch = () => {
+        for (const team of [2, 3]) {
+          const other = team === 2 ? 3 : 2;
+          if (alive[team].size === 1 && alive[other].size >= 1) {
+            const id = [...alive[team]][0];
+            if (!clutched.has(id)) clutched.add(id), st(id).pendingClutch = { n: Math.min(5, alive[other].size), team };
+          }
+        }
+      };
+      checkClutch();
+      rd.forEach((d, i) => {
+        const a = String(d.attacker_steamid || ""), v = String(d.user_steamid);
+        const vt = d.user_team_num;
+        alive[vt]?.delete(v);
+        if (enemyKill(d)) {
+          contrib.add(a);
+          const entry = d === firstKill;
+          if (entry) { st(a).entryK++; st(v).entryD++; duel(a, v).ek++; }
+          // размен: напарник жертвы убил убийцу за 5 секунд
+          const trade = rd.slice(i + 1).find((x) => x.tick - d.tick <= TRADE && String(x.user_steamid) === a && x.attacker_team_num === vt && enemyKill(x));
+          if (trade) {
+            const t = String(trade.attacker_steamid);
+            st(t).tradeK++; st(v).tradedD++; duel(t, a).tk++; contrib.add(v);
+            if (entry) st(v).entryTraded++;
+          }
+        }
+        if (d.assister_steamid && d.assister_team_num !== vt) contrib.add(String(d.assister_steamid));
+        checkClutch();
+      });
+      const winner = end.winner === "CT" ? 3 : 2;
+      roster.forEach((team, id) => {
+        const s = st(id);
+        s.rounds++;
+        if (alive[team].has(id)) contrib.add(id);
+        if (contrib.has(id)) s.kastRounds++;
+        if (s.pendingClutch) { s.clutch[s.pendingClutch.n][s.pendingClutch.team === winner ? 0 : 1]++; delete s.pendingClutch; }
+      });
+    }
+
+    const NADE = { hegrenade: "he", flashbang: "flash", smokegrenade: "smoke", molotov: "molly", incgrenade: "molly", decoy: "decoy" };
+    for (const f of fires) { const k = NADE[wname(f.weapon)]; if (k && f.user_steamid) st(f.user_steamid).nades[k]++; }
+    // урон — не больше, чем у жертвы оставалось HP (с начала каждого раунда у всех 100)
+    const hp = new Map();
+    let feIdx = 0;
+    for (const h of [...hurts].sort((a, b) => a.tick - b.tick)) {
+      while (feIdx < fes.length && fes[feIdx] <= h.tick) { hp.clear(); feIdx++; }
+      const v = String(h.user_steamid);
+      const dmg = Math.max(0, Math.min(h.dmg_health || 0, hp.get(v) ?? 100));
+      hp.set(v, h.health ?? Math.max(0, (hp.get(v) ?? 100) - dmg));
+      if (!h.attacker_steamid || h.attacker_team_num === h.user_team_num) continue;
+      duel(String(h.attacker_steamid), String(h.user_steamid)).dmg += dmg;
+      const w = wname(h.weapon);
+      if (w === "hegrenade") st(h.attacker_steamid).heDmg += dmg;
+      else if (/inferno|molotov|incgrenade/.test(w)) st(h.attacker_steamid).fireDmg += dmg;
+    }
+    for (const b of blinds) {
+      if (!b.attacker_steamid || b.attacker_steamid === b.user_steamid) continue;
+      const s = st(b.attacker_steamid), sec = b.blind_duration || 0;
+      if (b.attacker_team_num === b.user_team_num) { s.flashTeam++; s.flashTeamSec += sec; } else { s.flashEnemies++; s.flashEnemySec += sec; }
+    }
+    const round1 = (x) => Math.round(x * 10) / 10;
+    const per = {};
+    A.forEach((s, id) => {
+      per[id] = { ...s, kast: s.rounds ? Math.round((s.kastRounds / s.rounds) * 100) : null,
+        flashEnemySec: round1(s.flashEnemySec), flashTeamSec: round1(s.flashTeamSec) };
+      delete per[id].kastRounds;
+    });
+    return { per, duels };
+  }
+
   const avg = (a) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : null);
   const players = final.filter((f) => f.team_num === 2 || f.team_num === 3).map((f) => {
     const p = get(f.steamid, f.name) || {};
@@ -168,6 +281,7 @@ try {
       longest: Math.round(p.longest || 0), wallbangs: p.wallbangs, noscopes: p.noscopes, smokeKills: p.smokeKills,
       airKills: p.airKills, blindKills: p.blindKills, flashSec: Math.round(p.flashSec * 10) / 10,
       fav: fav ? fav[0] : null,
+      adv: adv?.per[String(f.steamid)] || null,
     };
   }).sort((a, b) => b.kills - a.kills);
 
@@ -181,6 +295,7 @@ try {
     matchSec: Math.round((endTick - startTick) / TICK), rounds,
     teams: [...teams.values()].sort((a, b) => (a.side > b.side ? -1 : 1)),
     players,
+    duels: adv?.duels || null,
     facts: {
       longest, fastestOpen, ...fx, kills: deaths.length,
       shots: fires.filter((f) => !NOT_GUN.test(wname(f.weapon))).length,

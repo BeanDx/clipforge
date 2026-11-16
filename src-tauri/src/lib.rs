@@ -94,6 +94,7 @@ pub fn run() {
       gsi::gsi_home,
       gsi::steam_playtime,
       faceit::faceit_recent,
+      faceit::faceit_match,
       faceit::faceit_open,
       faceit::faceit_import,
       profile::steam_profile,
