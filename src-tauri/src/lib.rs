@@ -1,4 +1,5 @@
 mod faceit;
+mod lobby;
 mod friends;
 mod display;
 mod ffmpeg;
@@ -94,6 +95,8 @@ pub fn run() {
       gsi::gsi_home,
       gsi::steam_playtime,
       faceit::faceit_recent,
+      lobby::lobby_players,
+      lobby::lobby_profile,
       faceit::faceit_match,
       faceit::faceit_open,
       faceit::faceit_import,

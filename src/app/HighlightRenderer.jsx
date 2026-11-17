@@ -536,6 +536,9 @@ export default function HighlightRenderer() {
   const [sysInfo, setSysInfo] = useState(null);
   const [faceitKey, setFaceitKey] = useState(() => { try { return localStorage.getItem("cf-faceit-key") || ""; } catch { return ""; } });
   useEffect(() => { try { localStorage.setItem("cf-faceit-key", faceitKey.trim()); } catch {} }, [faceitKey]);
+  // экспериментально: игроки матча из памяти CS2 (src-tauri/src/lobby.rs), по умолчанию выключено
+  const [lobbyMem, setLobbyMem] = useState(() => { try { return localStorage.getItem("cf-lobby-mem") === "1"; } catch { return false; } });
+  useEffect(() => { try { localStorage.setItem("cf-lobby-mem", lobbyMem ? "1" : "0"); } catch {} }, [lobbyMem]);
   const infoReq = useRef(0);
   const cachedInfo = (path) => { try { return JSON.parse(localStorage.getItem(`cf-info:${path}`) || "null"); } catch { return null; } };
   const saveInfo = (path, i) => { try { localStorage.setItem(`cf-info:${path}`, JSON.stringify(i)); } catch {} };
@@ -1629,7 +1632,7 @@ const voicePayload = useMemo(() => {
       })()}
 
       {tab === HOME_TAB ? (
-        <Home cs2={paths.cs2} faceitKey={faceitKey} onOpenDemo={openFromArchive}
+        <Home cs2={paths.cs2} faceitKey={faceitKey} lobbyMem={lobbyMem} onOpenDemo={openFromArchive}
           onOpenEdit={(demos) => { setEditPreset({ demos, at: Date.now() }); openEdit(); }} />
       ) : tab === PROFILE_TAB ? (
         <Profile faceitKey={faceitKey} onGoSettings={() => setTab(SETTINGS_TAB)} />
@@ -1808,6 +1811,9 @@ const voicePayload = useMemo(() => {
               <input className="mono" value={faceitKey} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" spellCheck={false}
                 onChange={(e) => setFaceitKey(e.target.value)} />
             </label>
+            <Toggle label={tr("Игроки матча в ММ и Premier (эксперимент)")}
+              hint={tr("читает ники и SteamID игроков из памяти CS2. Риск VAC-бана: Valve может принять это за чит. Включаешь на свой страх и риск")}
+              checked={lobbyMem} onChange={setLobbyMem} />
           </Frame>
 
           <Frame title={tr("Трей и автозапуск")} meta={closeToTray ? tr("крестик сворачивает в трей") : tr("крестик закрывает программу")} className="span-2"

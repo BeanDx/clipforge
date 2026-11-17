@@ -8,6 +8,7 @@ import { mapName, mapTint } from "../match/dossier";
 import { Rating } from "../match/Rating";
 import { editKills } from "../edit/montage";
 import { placeOf, roundless, modeName } from "./place";
+import { Lobby } from "./Lobby";
 
 const DAY = 86_400_000;
 const WEAPON = (w) => ({ ssg08: "SSG 08", awp: "AWP", ak47: "AK-47", m4a1_silencer: "M4A1-S", m4a1: "M4A4", deagle: "Deagle", usp_silencer: "USP-S", glock: "Glock", "?": "?" }[w] || (w || "").replace(/_/g, " ").toUpperCase());
@@ -84,7 +85,7 @@ function MoreToggle({ total, open, onToggle }) {
   );
 }
 
-export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
+export function Home({ cs2, faceitKey, lobbyMem, onOpenEdit, onOpenDemo }) {
   useLang();
   const [home, setHome] = useState(null); // { history, live }
   const [pt, setPt] = useState(null); // часы из Steam
@@ -296,6 +297,8 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
   const myScore = live?.team === "CT" ? [live.score_ct, live.score_t] : [live?.score_t || 0, live?.score_ct || 0];
   const name = pt?.name || "";
 
+  const me = pt?.steamid ? String(pt.steamid) : "";
+
   return (
     <div className="hm">
       {/* шапка: привет и что сейчас в игре */}
@@ -354,6 +357,9 @@ export function Home({ cs2, faceitKey, onOpenEdit, onOpenDemo }) {
           )}
         </div>
       </section>
+
+      {/* игроки матча ММ / Premier (эксперимент, память CS2) */}
+      <Lobby enabled={lobbyMem} live={live} place={place} faceitKey={key} me={me} />
 
       {/* цифры */}
       <section className="hm-tiles">
