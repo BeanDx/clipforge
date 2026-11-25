@@ -94,5 +94,17 @@
 .s3d-info .s3d-kf__ct { color: #8fb3ec; }
 .s3d-info b { font-weight: 700; }
 .s3d-info .is-good { color: #4cff4c; }
-.s3d-info .is-mid { color: #f5c518; }
+.s3d-info .is-mid { color: var(--yellow); }
 .s3d-info .is-bad { color: #ff5d5d; }
+
+/* голосовой чат: кто говорит сейчас */
+.s3d-voice { position: absolute; left: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 4px; pointer-events: none; }
+.s3d-voice__who { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 600;
+  color: #fff; background: rgba(10, 12, 16, .72); border: 1px solid rgba(255, 255, 255, .12); backdrop-filter: blur(6px); animation: s3d-voice-in .18s ease-out; }
+.s3d-voice__who i { width: 8px; height: 8px; border-radius: 50%; background: #4cff4c; box-shadow: 0 0 8px #4cff4c; animation: s3d-voice-pulse .9s ease-in-out infinite; }
+.s3d-voice__who.is-t i { background: #e8b04a; box-shadow: 0 0 8px #e8b04a; }
+.s3d-voice__who.is-ct i { background: #5aa9ff; box-shadow: 0 0 8px #5aa9ff; }
+@keyframes s3d-voice-in { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
+@keyframes s3d-voice-pulse { 50% { transform: scale(.65); opacity: .6; } }
+@media (prefers-reduced-motion: reduce) { .s3d-voice__who, .s3d-voice__who i { animation: none; } }
+.s3d__novoice { font-size: 11px; cursor: help; white-space: nowrap; }

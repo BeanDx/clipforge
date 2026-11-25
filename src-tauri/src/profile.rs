@@ -100,7 +100,12 @@ fn local_profile(id: &str) -> Option<SteamProfile> {
 
 #[tauri::command]
 pub async fn steam_profile(query: String) -> Result<SteamProfile, String> {
-    let url = steam_url(&query);
+    steam_profile_sync(&query)
+}
+
+// то же без async — для фоновых потоков (lobby.rs)
+pub(crate) fn steam_profile_sync(query: &str) -> Result<SteamProfile, String> {
+    let url = steam_url(query);
     if let Some((at, p)) = with_cache(|c| c.get(&url).cloned()) {
         if now_ms().saturating_sub(at) < FRESH_MS { return Ok(p); }
     }

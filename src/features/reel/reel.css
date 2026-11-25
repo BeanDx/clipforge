@@ -1,7 +1,7 @@
 /* === Моменты из других демок, которые тоже попадут в рендер === */
 .xdemo {
   display: flex; flex-direction: column; gap: 10px; padding: 14px 16px;
-  border: 1px solid rgba(46,230,192,.35); background: rgba(46,230,192,.03);
+  border: 1px solid rgba(var(--t-rgb), .35); background: rgba(var(--t-rgb), .03);
   animation: tab-in .35s var(--ease) both;
 }
 .xdemo__head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
@@ -18,11 +18,11 @@
 .xdemo__moments .tag { font-size: .7rem; }
 .xdemo__x { padding: 5px 9px; }
 .chip--del:disabled, .xdemo .chip:disabled { opacity: .45; cursor: default; }
-.xdemo__list li.is-current { border-color: rgba(46,230,192,.45); }
-.xdemo__badge { font-size: .7rem; color: var(--teal); padding: 3px 8px; border: 1px solid rgba(46,230,192,.45); }
+.xdemo__list li.is-current { border-color: rgba(var(--t-rgb), .45); }
+.xdemo__badge { font-size: .7rem; color: var(--teal); padding: 3px 8px; border: 1px solid rgba(var(--t-rgb), .45); }
 .xdemo__add { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.chip--add { color: var(--teal); border-color: rgba(46,230,192,.55); font-weight: 600; }
-.chip--add.is-on { background: rgba(46,230,192,.12); }
+.chip--add { color: var(--teal); border-color: rgba(var(--t-rgb), .55); font-weight: 600; }
+.chip--add.is-on { background: rgba(var(--t-rgb), .12); }
 .xdemo__pick {
   list-style: none; margin: 0; padding: 0;
   display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px;
@@ -34,7 +34,7 @@
   border: 1px solid var(--line); border-left: 3px solid var(--map, var(--line)); background: var(--panel);
   transition: border-color .15s, background .15s;
 }
-.xdemo__pick button:hover:not(:disabled) { border-color: rgba(46,230,192,.55); background: rgba(46,230,192,.06); }
+.xdemo__pick button:hover:not(:disabled) { border-color: rgba(var(--t-rgb), .55); background: rgba(var(--t-rgb), .06); }
 .xdemo__pick button:disabled { opacity: .45; cursor: default; }
 .xdemo__pick span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8rem; }
 .xdemo__file { justify-content: center; border-style: dashed !important; }

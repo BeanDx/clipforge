@@ -1,5 +1,7 @@
 mod faceit;
 mod lobby;
+mod ice;
+mod voice;
 mod friends;
 mod display;
 mod ffmpeg;
@@ -53,6 +55,7 @@ pub fn run() {
       scene3d::scene_map,
       scene3d::scene_players,
       scene3d::scene_grenades,
+      voice::scene_voice,
       scene3d::scene_weapon,
       scene3d::scene_icons,
       render::demo_info,

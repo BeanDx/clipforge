@@ -12,6 +12,22 @@ import Killfeed from "./Killfeed";
 import "./scene3d.css";
 
 const TICKRATE = 64;
+// чей голос слушать: свои, соперники, все или никто
+const VOICE_MODES = ["team", "enemy", "all", "off"];
+const VOICE_KEY = "cf-s3d-voice";
+const savedVoice = () => { try { const v = localStorage.getItem(VOICE_KEY); return VOICE_MODES.includes(v) ? v : "team"; } catch { return "team"; } };
+
+// base64 Ogg Opus → <audio>: сам тянет звук и держит высоту голоса на 0.5× и 0.25×
+function phraseAudio(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const url = URL.createObjectURL(new Blob([bytes], { type: "audio/ogg" }));
+  const a = new Audio(url);
+  a.preload = "auto";
+  a.preservesPitch = true;
+  return { a, url };
+}
 
 export default function Scene3DModal({ demoPath, steamid, clip, map, cs2, fov, orbitOn, onClose }) {
   const canvasRef = useRef(null);
@@ -28,7 +44,11 @@ export default function Scene3DModal({ demoPath, steamid, clip, map, cs2, fov, o
   const [iconDir, setIconDir] = useState(null);
   const [mapLabel, setMapLabel] = useState(map || "");
   const [stats, setStats] = useState(null);
-  const playRef = useRef({ playing: false, speed: 1, tick: clip.start });
+  const [voice, setVoice] = useState(null); // null — ещё читается; [] — голоса в демке нет
+  const [voiceMode, setVoiceMode] = useState(savedVoice);
+  const [speaking, setSpeaking] = useState([]); // steamid тех, кто говорит прямо сейчас
+  const voiceRef = useRef([]); // фразы с <audio>
+  const playRef = useRef({ playing: false, speed: 1, tick: clip.start, talking: "", allow: () => false });
 
   // загрузка: карта, игроки, путь облёта
   useEffect(() => {
@@ -59,7 +79,7 @@ export default function Scene3DModal({ demoPath, steamid, clip, map, cs2, fov, o
         });
         if (dead) return;
         scene.setPlayers(data, steamid);
-        setFeed({ kills: data.kills || [], team: new Map(data.players.map((p) => [p.id, p.team])) });
+        setFeed({ kills: data.kills || [], team: new Map(data.players.map((p) => [p.id, p.team])), name: new Map(data.players.map((p) => [p.id, p.name])) });
         // иконки киллфида из игры; не вышло — останутся названия оружия текстом
         invoke("scene_icons", { cs2 }).then((d) => { if (!dead) setIconDir(d); }).catch(() => {});
         // модели оружия выгружаются из игры по мере надобности (первый раз — пара секунд на ствол)
@@ -77,6 +97,14 @@ export default function Scene3DModal({ demoPath, steamid, clip, map, cs2, fov, o
         invoke("scene_grenades", { path: demoPath, start: clip.start, end: clip.end })
           .then((j) => { if (!dead) scene.setFlights(JSON.parse(j).nades); })
           .catch((e) => console.warn("3D: гранаты", e));
+        // голосовой чат: есть в демках FACEIT и комьюнити-серверов, у матчмейкинга Valve его нет
+        invoke("scene_voice", { path: demoPath, start: clip.start, end: clip.end })
+          .then((list) => {
+            if (dead) return;
+            voiceRef.current = list.map((p) => ({ id: p.id, tick: p.tick, dur: p.dur, ...phraseAudio(p.ogg) }));
+            setVoice(list.map(({ id, tick, dur }) => ({ id, tick, dur })));
+          })
+          .catch((e) => { console.warn("3D: голос", e); if (!dead) setVoice([]); });
         const kill = clip.killTicks?.[clip.killTicks.length - 1];
         if (kill != null) {
           const cine = await invoke("parse_cine", { path: demoPath, steamid, kills: JSON.stringify([kill]) }).then(JSON.parse).catch(() => null);
@@ -96,6 +124,8 @@ export default function Scene3DModal({ demoPath, steamid, clip, map, cs2, fov, o
       dead = true;
       ro.disconnect();
       un.then((f) => f());
+      for (const v of voiceRef.current) { v.a.pause(); URL.revokeObjectURL(v.url); }
+      voiceRef.current = [];
       scene.dispose();
       sceneRef.current = null;
     };
@@ -103,6 +133,17 @@ export default function Scene3DModal({ demoPath, steamid, clip, map, cs2, fov, o
 
   // проигрывание по времени демки
   useEffect(() => { playRef.current.playing = playing; playRef.current.speed = speed; }, [playing, speed]);
+  // фильтр голоса: свои — та же команда, что у игрока клипа
+  useEffect(() => {
+    try { localStorage.setItem(VOICE_KEY, voiceMode); } catch { /* приватное окно */ }
+    const mine = feed?.team.get(String(steamid));
+    playRef.current.allow = (id) => {
+      if (voiceMode === "all") return true;
+      if (voiceMode === "off" || !feed) return false;
+      const t = feed.team.get(id);
+      return t != null && (voiceMode === "team" ? t === mine : t !== mine);
+    };
+  }, [voiceMode, feed, steamid]);
   useEffect(() => {
     if (!ready) return;
     let raf = 0, last = performance.now(), shown = 0;
@@ -117,6 +158,20 @@ export default function Scene3DModal({ demoPath, steamid, clip, map, cs2, fov, o
         sceneRef.current?.setTick(p.tick);
         if (now - shown > 66) { shown = now; setTick(p.tick); }
       }
+      // голос идёт за временем демки: фраза звучит, пока её отрезок под ползунком
+      const talking = [];
+      for (const v of voiceRef.current) {
+        const at = (p.tick - v.tick) / TICKRATE;
+        const on = at >= 0 && at < v.dur && p.allow(v.id);
+        if (on) talking.push(v.id);
+        if (on && p.playing) {
+          v.a.playbackRate = p.speed;
+          if (v.a.paused) { v.a.currentTime = at; v.a.play().catch(() => {}); }
+          else if (Math.abs(v.a.currentTime - at) > 0.25) v.a.currentTime = at;
+        } else if (!v.a.paused) v.a.pause();
+      }
+      const key = [...new Set(talking)].join();
+      if (key !== p.talking) { p.talking = key; setSpeaking(key ? key.split(",") : []); }
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
@@ -195,6 +250,14 @@ export default function Scene3DModal({ demoPath, steamid, clip, map, cs2, fov, o
           {ready && feed && (
             <Killfeed kills={feed.kills} tick={tick} me={String(steamid)} teamOf={(id) => feed.team.get(id)} iconDir={iconDir} />
           )}
+          {ready && speaking.length > 0 && feed && (
+            <div className="s3d-voice" aria-live="polite">
+              {speaking.map((id) => {
+                const t = feed.team.get(id);
+                return <span key={id} className={`s3d-voice__who ${t === 2 ? "is-t" : t === 3 ? "is-ct" : ""}`}><i />{feed.name.get(id) || id}</span>;
+              })}
+            </div>
+          )}
           {ready && mode === "free" && <span className="s3d__hint mono dim">{tr("мышь - вращать, колесо - приблизить, ПКМ - сдвинуть. Жёлтая линия - путь облёта")}</span>}
         </div>
         <div className="s3d__bar">
@@ -214,6 +277,16 @@ export default function Scene3DModal({ demoPath, steamid, clip, map, cs2, fov, o
               <button key={s} type="button" role="radio" aria-checked={speed === s} className={speed === s ? "is-on" : ""} onClick={() => setSpeed(s)}>{s}×</button>
             ))}
           </div>
+          {voice?.length > 0 && (
+            <div className="ratios s3d__voice" role="radiogroup" aria-label={tr("Голосовой чат")} title={tr("Голосовой чат из демки")}>
+              {[["team", tr("Свои")], ["enemy", tr("Соперники")], ["all", tr("Все")], ["off", tr("Без голоса")]].map(([k, l]) => (
+                <button key={k} type="button" role="radio" aria-checked={voiceMode === k} className={voiceMode === k ? "is-on" : ""} onClick={() => setVoiceMode(k)}>{l}</button>
+              ))}
+            </div>
+          )}
+          {voice?.length === 0 && (
+            <span className="mono dim s3d__novoice" title={tr("Valve не записывает голос в демки матчмейкинга и Premier. Голос есть в демках FACEIT и комьюнити-серверов")}>{tr("без голоса")}</span>
+          )}
         </div>
         <p className="s3d__note dim">{tr("Упрощённая карта без текстур и манекены вместо моделей - чтобы заранее увидеть, куда смотрит камера. На запись не влияет.")}</p>
       </div>

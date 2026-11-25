@@ -29,6 +29,42 @@ struct Offsets {
     steam_id: u64,
     name: u64,
     team: u64,
+    extra: Option<Extra>, // нет в дампе — только steamid, ник и команда
+    // все нужные поля контроллера лежат в одном куске памяти: читаем его целиком одним вызовом
+    block: u64, // начало куска (оффсет от контроллера)
+    block_len: usize,
+}
+
+// Поля CCSPlayerController, которые и так видны в таблице счёта (рейтинг, победы, прогноз, пинг).
+// Отдельно их не читаем: они попадают в тот же кусок памяти, что steamid, ник и команда.
+#[derive(Clone, Copy)]
+struct Extra {
+    ping: u64,
+    rank: u64,
+    wins: u64,
+    rank_type: u64,
+    win: u64,
+    loss: u64,
+    tie: u64,
+}
+const BLOCK_MAX: u64 = 0x1000; // кусок больше 4 КБ — дамп странный, лишние поля не берём
+
+#[derive(Serialize, Clone, Default)]
+pub struct Live {
+    pub ping: u32,
+    pub rank: i32,      // Premier — рейтинг, ММ — звание на карте (1–18), 0 — нет
+    pub rank_type: u8,  // 11 Premier, 12 ММ, 7 напарники, 10 вингман
+    pub wins: i32,
+    pub win: i32,       // прогноз рейтинга от игры: после победы / поражения / ничьей
+    pub loss: i32,
+    pub tie: i32,
+}
+
+// границы куска памяти, в который попадают поля (оффсет, размер)
+fn span(fields: &[(u64, u64)]) -> (u64, u64) {
+    let a = fields.iter().map(|f| f.0).min().unwrap_or(0);
+    let b = fields.iter().map(|f| f.0 + f.1).max().unwrap_or(0);
+    (a, b - a)
 }
 
 #[derive(Serialize, Clone)]
@@ -36,6 +72,7 @@ pub struct LobbyPlayer {
     pub steamid: String,
     pub name: String,
     pub team: String, // "T" | "CT" | ""
+    pub live: Option<Live>,
 }
 
 static OFFS: Mutex<Option<(u64, Offsets)>> = Mutex::new(None); // (когда загружены, оффсеты)
@@ -51,12 +88,28 @@ fn parse(offsets: &str, client: &str) -> Option<Offsets> {
     let o: Value = serde_json::from_str(offsets).ok()?;
     let c: Value = serde_json::from_str(client).ok()?;
     let cls = &c["client.dll"]["classes"];
-    Some(Offsets {
-        entity_list: o["client.dll"]["dwEntityList"].as_u64()?,
-        steam_id: cls["CBasePlayerController"]["fields"]["m_steamID"].as_u64()?,
-        name: cls["CBasePlayerController"]["fields"]["m_iszPlayerName"].as_u64()?,
-        team: cls["C_BaseEntity"]["fields"]["m_iTeamNum"].as_u64()?,
-    })
+    let f = &cls["CCSPlayerController"]["fields"];
+    let g = |n: &str| f[n].as_u64();
+    let extra = (|| Some(Extra {
+        ping: g("m_iPing")?, rank: g("m_iCompetitiveRanking")?, wins: g("m_iCompetitiveWins")?,
+        rank_type: g("m_iCompetitiveRankType")?, win: g("m_iCompetitiveRankingPredicted_Win")?,
+        loss: g("m_iCompetitiveRankingPredicted_Loss")?, tie: g("m_iCompetitiveRankingPredicted_Tie")?,
+    }))();
+    let (steam_id, name, team) = (
+        cls["CBasePlayerController"]["fields"]["m_steamID"].as_u64()?,
+        cls["CBasePlayerController"]["fields"]["m_iszPlayerName"].as_u64()?,
+        cls["C_BaseEntity"]["fields"]["m_iTeamNum"].as_u64()?,
+    );
+    let base = [(steam_id, 8), (name, 128), (team, 1)];
+    let (bs, bl) = span(&base);
+    if bl > BLOCK_MAX { return None; }
+    let mut all = base.to_vec();
+    if let Some(e) = extra {
+        all.extend([(e.ping, 4), (e.rank, 4), (e.wins, 4), (e.rank_type, 1), (e.win, 4), (e.loss, 4), (e.tie, 4)]);
+    }
+    let (es, el) = span(&all);
+    let (extra, block, block_len) = if el <= BLOCK_MAX { (extra, es, el) } else { (None, bs, bl) };
+    Some(Offsets { entity_list: o["client.dll"]["dwEntityList"].as_u64()?, steam_id, name, team, extra, block, block_len: block_len as usize })
 }
 
 fn fetch(file: &str) -> Result<String, String> {
@@ -157,38 +210,48 @@ impl Proc {
         let mut b = [0u8; 8];
         self.bytes(addr, &mut b).then(|| u64::from_le_bytes(b))
     }
-    fn u8(&self, addr: u64) -> Option<u8> {
-        let mut b = [0u8; 1];
-        self.bytes(addr, &mut b).then_some(b[0])
-    }
 }
 
 // настоящий SteamID64 (у ботов 0)
 fn real_id(id: u64) -> bool { (76561197960265729..76561202255233023).contains(&id) }
 
 // Контроллеры игроков лежат в первых 64 слотах списка сущностей. Размер записи CEntityIdentity
-// менялся между патчами (0x78 → 0x70), поэтому пробуем оба и берём тот, где нашлись живые steamid.
+// менялся между патчами (0x78 → 0x70), поэтому пробуем оба; первый подошедший — второй уже не трогаем.
+// Чтений за опрос: список + на каждый размер записи 1 блок слотов (все 64 слота в нём) и по 2 на слот:
+// указатель на контроллер и один кусок со всеми полями игрока.
 fn scan(p: &Proc, client: u64, o: Offsets) -> Vec<LobbyPlayer> {
     let Some(list) = p.u64(client + o.entity_list) else { return vec![] };
-    let mut best = vec![];
+    let Some(chunk) = p.u64(list + 16) else { return vec![] }; // слоты 0–511 в первом блоке
+    let mut buf = vec![0u8; o.block_len];
+    let at = |off: u64| (off - o.block) as usize;
     for stride in [0x70u64, 0x78] {
         let mut out: Vec<LobbyPlayer> = vec![];
         for i in 1u64..=64 {
-            let Some(chunk) = p.u64(list + 8 * (i >> 9) + 16) else { continue };
-            let Some(ctrl) = p.u64(chunk + stride * (i & 0x1FF)) else { continue };
-            let Some(id) = p.u64(ctrl + o.steam_id) else { continue };
+            let Some(ctrl) = p.u64(chunk + stride * i) else { continue };
+            if !p.bytes(ctrl + o.block, &mut buf) { continue; }
+            let b = &buf;
+            let u64_ = |off: u64| u64::from_le_bytes(b[at(off)..at(off) + 8].try_into().unwrap());
+            let i32_ = |off: u64| i32::from_le_bytes(b[at(off)..at(off) + 4].try_into().unwrap());
+            let id = u64_(o.steam_id);
             if !real_id(id) || out.iter().any(|x| x.steamid == id.to_string()) { continue; }
-            let mut nb = [0u8; 128];
-            let name = if p.bytes(ctrl + o.name, &mut nb) {
-                let n = nb.iter().position(|&c| c == 0).unwrap_or(nb.len());
-                String::from_utf8_lossy(&nb[..n]).into_owned()
-            } else { String::new() };
-            let team = match p.u8(ctrl + o.team) { Some(2) => "T", Some(3) => "CT", _ => "" };
-            out.push(LobbyPlayer { steamid: id.to_string(), name, team: team.into() });
+            let nb = &b[at(o.name)..at(o.name) + 128];
+            let n = nb.iter().position(|&c| c == 0).unwrap_or(nb.len());
+            let name = String::from_utf8_lossy(&nb[..n]).into_owned();
+            let team = match b[at(o.team)] { 2 => "T", 3 => "CT", _ => "" };
+            let live = o.extra.map(|e| Live {
+                ping: i32_(e.ping).max(0) as u32,
+                rank: i32_(e.rank),
+                rank_type: b[at(e.rank_type)],
+                wins: i32_(e.wins),
+                win: i32_(e.win),
+                loss: i32_(e.loss),
+                tie: i32_(e.tie),
+            });
+            out.push(LobbyPlayer { steamid: id.to_string(), name, team: team.into(), live });
         }
-        if out.len() > best.len() { best = out; }
+        if !out.is_empty() { return out; }
     }
-    best
+    vec![]
 }
 
 fn read_once(force: bool) -> Result<Vec<LobbyPlayer>, String> {
@@ -230,6 +293,103 @@ pub struct LobbyProfile {
     pub matches: Option<u64>,
     pub winrate: Option<f64>,
     pub vac: bool,
+    pub country: String, // код страны FACEIT (ru, ua, de…)
+    pub faceit_nick: String,
+    // Leetify: оценки 0–100 и время реакции
+    pub aim: Option<f64>,
+    pub utility: Option<f64>,
+    pub opening: Option<f64>,
+    pub reaction_ms: Option<f64>,
+    pub first_match: String, // дата первого матча на Leetify (ISO)
+    pub bans: u32,
+    // Steam
+    pub since: String, // «December 3, 2021»
+    pub public: bool,
+    pub limited: bool,
+    pub friends: Vec<String>, // steamid друзей (для пати); пусто — список скрыт или друзей нет
+    pub friends_hidden: bool,
+    pub steam_ok: bool, // Steam ответил: возраст, приватность и баны известны
+    // статистика игрока: FACEIT, если там от 10 побед, иначе Премьер, иначе ММ (по Leetify)
+    pub stat: Option<Stat>,
+}
+
+#[derive(Serialize, Clone, Default)]
+pub struct Stat {
+    pub source: String, // faceit | premier | mm
+    pub kd: Option<f64>,
+    pub wr: Option<f64>, // %
+    pub matches: u64,    // сколько матчей в основе винрейта
+    pub hs: Option<f64>, // % убийств в голову
+    pub adr: Option<f64>,
+    pub kd_games: u64, // по скольким матчам посчитан K/D (Leetify — последние несколько)
+    // на текущей карте
+    pub map_wr: Option<f64>,
+    pub map_kd: Option<f64>,
+    pub map_matches: u64,
+}
+
+// с FACEIT берём статистику, только если там набралось хоть немного игр
+const FACEIT_MIN_WINS: f64 = 10.0;
+// K/D для Премьера и ММ: Leetify отдаёт его только в подробностях матча — берём последние 5
+const KD_GAMES: usize = 5;
+
+static MATCHES: Mutex<Option<std::collections::HashMap<String, Value>>> = Mutex::new(None);
+
+fn leet_match(id: &str) -> Option<Value> {
+    if let Some(v) = MATCHES.lock().unwrap().as_ref().and_then(|c| c.get(id).cloned()) { return Some(v); }
+    let url = format!("https://api-public.cs-prod.leetify.com/v2/matches/{id}");
+    let mut r = ureq::get(&url).header("User-Agent", "clipforge").call().ok()?;
+    let v: Value = serde_json::from_str(&r.body_mut().read_to_string().ok()?).ok()?;
+    MATCHES.lock().unwrap().get_or_insert_with(Default::default).insert(id.into(), v.clone());
+    Some(v)
+}
+
+// Премьер (rank_type 11) или остальной матчмейкинг из последних матчей Leetify
+fn leet_stat(leet: &Value, steamid: &str, map: &str) -> Option<Stat> {
+    let recent = leet["recent_matches"].as_array()?;
+    let mm: Vec<&Value> = recent.iter().filter(|m| m["data_source"].as_str() == Some("matchmaking")).collect();
+    let premier: Vec<&Value> = mm.iter().copied().filter(|m| m["rank_type"].as_u64() == Some(11)).collect();
+    let (source, list) = if !premier.is_empty() { ("premier", premier) } else if !mm.is_empty() { ("mm", mm) } else { return None };
+    let wins = |l: &[&Value]| l.iter().filter(|m| m["outcome"].as_str() == Some("win")).count() as f64;
+    let on_map: Vec<&Value> = list.iter().copied().filter(|m| m["map_name"].as_str() == Some(map)).collect();
+    let mut st = Stat {
+        source: source.into(),
+        wr: Some(wins(&list) / list.len() as f64 * 100.0),
+        matches: list.len() as u64,
+        map_wr: (!on_map.is_empty()).then(|| wins(&on_map) / on_map.len() as f64 * 100.0),
+        map_matches: on_map.len() as u64,
+        ..Default::default()
+    };
+    let (mut k, mut d, mut hs, mut dmg, mut rounds, mut games) = (0.0, 0.0, 0.0, 0.0, 0.0, 0u64);
+    for m in list.iter().take(KD_GAMES) {
+        let Some(id) = m["id"].as_str() else { continue };
+        let Some(full) = leet_match(id) else { continue };
+        let Some(me) = full["stats"].as_array().and_then(|a| a.iter().find(|x| x["steam64_id"].as_str() == Some(steamid))) else { continue };
+        k += num(&me["total_kills"]).unwrap_or(0.0);
+        d += num(&me["total_deaths"]).unwrap_or(0.0);
+        hs += num(&me["total_hs_kills"]).unwrap_or(0.0);
+        dmg += num(&me["total_damage"]).unwrap_or(0.0);
+        rounds += num(&me["rounds_count"]).unwrap_or(0.0);
+        games += 1;
+    }
+    if games > 0 {
+        st.kd = Some(k / d.max(1.0));
+        st.hs = (k > 0.0).then(|| hs / k * 100.0);
+        st.adr = (rounds > 0.0).then(|| dmg / rounds);
+        st.kd_games = games;
+    }
+    Some(st)
+}
+
+// steamcommunity.com быстро отвечает 429: страницы друзей запрашиваем по одной
+static STEAM_GATE: Mutex<()> = Mutex::new(());
+
+fn num(v: &Value) -> Option<f64> { v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())) }
+
+// «Dust2» / «de_dust2» → «de_dust2» (как mapId в profile/data.js)
+fn map_id(m: &str) -> String {
+    let s: String = m.to_lowercase().split_whitespace().collect();
+    if s.contains('_') { s } else { format!("de_{s}") }
 }
 
 static LEET: Mutex<Option<std::collections::HashMap<String, (u64, Value)>>> = Mutex::new(None);
@@ -265,16 +425,99 @@ pub async fn lobby_profile(steamid: String, map: String, key: String) -> Result<
         matches: leet["total_matches"].as_u64(),
         winrate: leet["winrate"].as_f64(),
         vac: leet["bans"].as_array().is_some_and(|b| !b.is_empty()),
+        bans: leet["bans"].as_array().map_or(0, |b| b.len() as u32),
+        aim: num(&leet["rating"]["aim"]),
+        utility: num(&leet["rating"]["utility"]),
+        opening: num(&leet["rating"]["opening"]),
+        reaction_ms: num(&leet["stats"]["reaction_time_ms"]).filter(|&x| x > 0.0),
+        first_match: leet["first_match_date"].as_str().unwrap_or("").into(),
         ..Default::default()
     };
+    // FACEIT по ключу: точные уровень и эло, страна и ник
     if key.trim().len() >= 32 {
-        if let Ok(m) = crate::render::faceit_levels(key, vec![steamid.clone()]).await {
-            if let Some(&(l, e)) = m.get(&steamid) { p.faceit = Some(l); p.faceit_elo = Some(e); }
+        let (id, k) = (steamid.clone(), key.clone());
+        let fc = tauri::async_runtime::spawn_blocking(move || {
+            let key = k;
+            let url = format!("https://open.faceit.com/data/v4/players?game=cs2&game_player_id={id}");
+            let mut r = ureq::get(&url).header("Authorization", &format!("Bearer {}", key.trim())).call().ok()?;
+            serde_json::from_str::<Value>(&r.body_mut().read_to_string().ok()?).ok()
+        }).await.ok().flatten();
+        if let Some(v) = fc {
+            let g = &v["games"]["cs2"];
+            if let Some(l) = g["skill_level"].as_u64() { p.faceit = Some(l); }
+            if let Some(e) = g["faceit_elo"].as_u64() { p.faceit_elo = Some(e); }
+            p.country = v["country"].as_str().unwrap_or("").to_lowercase();
+            p.faceit_nick = v["nickname"].as_str().unwrap_or("").into();
+            // аватар FACEIT — запасной, если Steam не ответит
+            p.avatar = v["avatar"].as_str().unwrap_or("").into();
+            // статистика FACEIT: за всё время и на текущей карте
+            if let Some(pid) = v["player_id"].as_str().map(String::from) {
+                let key = key.clone();
+                let all = tauri::async_runtime::spawn_blocking(move || {
+                    let url = format!("https://open.faceit.com/data/v4/players/{pid}/stats/cs2");
+                    let mut r = ureq::get(&url).header("Authorization", &format!("Bearer {}", key.trim())).call().ok()?;
+                    serde_json::from_str::<Value>(&r.body_mut().read_to_string().ok()?).ok()
+                }).await.ok().flatten();
+                if let Some(all) = all {
+                    let life = &all["lifetime"];
+                    if num(&life["Wins"]).unwrap_or(0.0) >= FACEIT_MIN_WINS {
+                        let mid = map_id(&map);
+                        let seg = all["segments"].as_array().and_then(|a| a.iter()
+                            .find(|s| s["mode"].as_str().is_none_or(|m| m == "5v5") && map_id(s["label"].as_str().unwrap_or("")) == mid))
+                            .map(|s| s["stats"].clone()).unwrap_or(Value::Null);
+                        p.stat = Some(Stat {
+                            source: "faceit".into(),
+                            kd: num(&life["Average K/D Ratio"]),
+                            wr: num(&life["Win Rate %"]),
+                            matches: num(&life["Matches"]).unwrap_or(0.0) as u64,
+                            hs: num(&life["Average Headshots %"]),
+                            adr: num(&life["ADR"]).filter(|&x| x > 0.0),
+                            map_wr: num(&seg["Win Rate %"]),
+                            map_kd: num(&seg["Average K/D Ratio"]),
+                            map_matches: num(&seg["Matches"]).unwrap_or(0.0) as u64,
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
         }
     }
-    if let Ok(s) = crate::profile::steam_profile(steamid).await {
-        p.avatar = s.avatar;
-        p.vac |= s.vac;
+    // нет FACEIT (или там меньше 10 побед) — Премьер, а если его нет, ММ
+    if p.stat.is_none() {
+        let (id, m) = (steamid.clone(), map.clone());
+        p.stat = tauri::async_runtime::spawn_blocking(move || leet_stat(&leet, &id, &m)).await.ok().flatten();
+    }
+    // Steam: профиль, потом друзья (для пати). steamcommunity.com быстро режет частые запросы,
+    // поэтому все запросы к нему идут по одному с паузой; если Steam отказал — друзей уже не спрашиваем
+    let id = steamid.clone();
+    let steam = tauri::async_runtime::spawn_blocking(move || {
+        let _g = STEAM_GATE.lock().unwrap_or_else(|e| e.into_inner());
+        let prof = crate::profile::steam_profile_sync(&id);
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        let friends = match &prof {
+            Ok(s) if s.public && !s.stale => {
+                let f = crate::friends::web_friends(&id);
+                std::thread::sleep(std::time::Duration::from_millis(700));
+                f.ok()
+            }
+            _ => None,
+        };
+        (prof, friends)
+    }).await.ok();
+    match steam {
+        Some((Ok(s), friends)) => {
+            p.steam_ok = true;
+            if !s.avatar.is_empty() { p.avatar = s.avatar; }
+            p.vac |= s.vac;
+            p.since = s.since;
+            p.public = s.public;
+            p.limited = s.limited;
+            match friends {
+                Some(l) if !l.is_empty() => p.friends = l.into_iter().map(|f| f.steamid).collect(),
+                _ => p.friends_hidden = true,
+            }
+        }
+        _ => p.friends_hidden = true,
     }
     Ok(p)
 }

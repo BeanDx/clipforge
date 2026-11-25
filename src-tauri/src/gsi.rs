@@ -506,6 +506,8 @@ pub struct LiveView {
     pub session_started: Option<u64>,
     // режим из игры: competitive, premier, deathmatch, casual, scrimcomp2v2…
     pub mode: String,
+    // начало текущего матча (мс): по нему отличаем один матч от следующего на той же карте
+    pub match_started: Option<u64>,
     // "menu" — в главном меню, "playing" — в матче
     pub activity: String,
     pub server: ServerInfo,
@@ -529,6 +531,7 @@ fn live_view(l: &Live) -> LiveView {
         highlights: m.map(|m| m.rounds.iter().filter(|r| !r.tags.is_empty()).cloned().collect()).unwrap_or_default(),
         session_started: l.session.as_ref().map(|s| s.started),
         mode: s_str(&l.live, &["map", "mode"]).unwrap_or("").into(),
+        match_started: m.map(|m| m.started),
         activity: s_str(&l.live, &["player", "activity"]).unwrap_or("").into(),
         server: if connected { server_now(l.session.as_ref().map(|s| s.started).unwrap_or(0)) } else { ServerInfo::default() },
     }

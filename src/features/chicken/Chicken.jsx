@@ -19,6 +19,7 @@ const WALK = 44;
 const RUN = 240;
 const CHICK = 28;
 
+const BUILD = Math.random().toString(36).slice(2);
 const rnd = (a, b) => a + Math.random() * (b - a);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -37,7 +38,9 @@ const CLICKABLE = "button, a, input, select, textarea, label, summary, [role=but
 export function Chicken(props) {
   const prefs = useChickenPrefs();
   useEffect(() => setSoundOn(prefs.sound), [prefs.sound]);
-  return prefs.on ? <Hen {...props} /> : null;
+  // ключ меняется при каждой загрузке модуля: после горячей перезагрузки в dev курица монтируется заново
+  // с новым движком, а не продолжает жить со старым кодом
+  return prefs.on ? <Hen key={BUILD} {...props} /> : null;
 }
 
 // Весь «мозг» курицы: состояние, физика, поведение. Создаётся один раз на курицу.
@@ -50,6 +53,8 @@ function createEngine(set) {
     petAcc: 0, petLast: 0, petT: 0, purrAt: 0, mouse: { x: -1, y: -1, t: 0 },
     activity: now0, flipAt: 0, hopAt: 0, checkAt: now0 + 2000,
     helmet: false, hasEgg: false, hasChick: false, cx: 0, cy: 0, cvy: 0, cdir: 1, timers: new Set(),
+    perch: 0, // высота «пола» над низом окна: проводник сидит на блоке запуска рендера
+
   };
   const els = {};
   const E = { st, els, set, live: { rendering: false, over: false } };
@@ -81,8 +86,8 @@ function createEngine(set) {
     }
   };
   const enter = (m, ms = 0) => { st.mode = m; st.until = ms ? performance.now() + ms : 0; set.mode(m); };
-  const go = (m, tx, speed, then = null) => { st.tx = tx; st.speed = speed; st.then = then; enter(m); };
-  const grounded = () => st.y <= 0 && st.vy === 0;
+  const go = (m, tx, speed, then = null) => { if (then !== "guide") st.perch = 0; st.tx = tx; st.speed = speed; st.then = then; enter(m); };
+  const grounded = () => st.y <= st.perch && st.vy === 0;
   const clampX = (x) => clamp(x, 8, Math.max(8, vw() - W - 8));
 
   // есть ли под курицей что-то кликабельное (кнопка, вкладка, поле)
@@ -109,11 +114,58 @@ function createEngine(set) {
     return null;
   };
 
+  // ——— проводник пошагового режима (Lumen) ———
+  // live.guide = { kind: "next" | "render" | "missing", sel: кнопка, к которой идти, text: что сказать }
+  const guideRect = () => {
+    const g = E.live.guide;
+    const el = g && document.querySelector(g.sel);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return r.width && r.bottom > 0 && r.top < vh() ? r : null;
+  };
+  // садится на верхний край блока с кнопкой: панели «Назад / Далее» или блока запуска рендера
+  const perchHeight = () => {
+    const g = E.live.guide;
+    if (!g) return 0;
+    const box = document.querySelector(g.sel)?.closest(g.kind === "next" ? ".wz-nav" : ".launch");
+    if (!box) return 0;
+    const h = vh() - FLOOR - box.getBoundingClientRect().top;
+    return h > 40 && h < vh() - FLOOR - W - 4 ? Math.round(h) : 0;
+  };
+  const guideAct = () => {
+    const g = E.live.guide, r = guideRect();
+    if (!r) return false;
+    // встаёт сбоку от кнопки (слева, если есть место), а не на ней
+    const tx = clampX(r.left - W - 6 >= 8 ? r.left - W - 6 : r.right + 6);
+    if (Math.abs(tx - st.x) > 14) { go("walk", tx, WALK * 1.8, "guide"); return true; }
+    st.dir = r.left + r.width / 2 > st.x + W / 2 ? 1 : -1;
+    // у запуска рендера — запрыгивает на верхний край его блока
+    const h = perchHeight();
+    if (h > 0 && st.perch !== h && st.y < h) {
+      st.perch = h; st.vx = 0; st.vy = Math.sqrt(2 * G * (h - st.y + 36));
+      enter("air"); cluck("cluck"); feathers(2, 0.6);
+      return true;
+    }
+    if (g.kind === "missing") { say(g.text || "?", 3400); enter("look", 3200); return true; }
+    if (g.kind === "render") {
+      enter(Math.random() < 0.6 ? "sit" : "peck", rnd(1800, 3400));
+      return true;
+    }
+    const r2 = Math.random();
+    if (r2 < 0.55) {
+      enter("peck", 1500);
+      if (Math.random() < 0.2) cluck();
+    } else enter(r2 < 0.8 ? "look" : "idle", rnd(1400, 2600));
+    return true;
+  };
+
   const decide = () => {
     const now = performance.now();
+    if (st.perch && !perchHeight()) st.perch = 0; // проводник больше не нужен — спрыгивает
     if (E.live.over) return toAlert();
     if (E.live.rendering) return enter("watch");
     if (now - st.activity > 120000) return enter("sleep");
+    if (E.live.guide && guideAct()) return;
     const r = Math.random();
     if (r < 0.02 && !st.hasEgg && !st.hasChick) return enter("lay", 2400);
     if (r < 0.045 && !st.helmet) {
@@ -150,6 +202,7 @@ function createEngine(set) {
     if (st.mode === "panic") { st.tx = clampX(rnd(0, vw())); return; } // мечется до конца паники
     if (then === "hidden") return enter("hidden", rnd(3500, 6500));
     if (then === "alert") return enter("alert");
+    if (then === "guide" && guideAct()) return;
     enter("idle", rnd(1200, 3500));
   };
 
@@ -182,6 +235,8 @@ function createEngine(set) {
     }
     if (st.mode === "peek" || st.mode === "hidden") { cluck(); return go("enter", clampX(st.x + st.dir * 170), WALK * 1.5); }
     if (["angry", "flee", "air", "drag", "dizzy", "panic", "party"].includes(st.mode)) { cluck(); return; }
+    // стоит с «?» у неготового рендера — по клику ведёт в настройки
+    if (E.live.guide?.kind === "missing" && E.live.onGuide) { cluck(); E.live.onGuide(); return; }
     st.clicks = st.clicks.filter((t) => now - t < 2500);
     st.clicks.push(now);
     if (st.clicks.length >= 5) {
@@ -211,7 +266,14 @@ function createEngine(set) {
   const tick = (dt, now) => {
     const VW = vw();
     if (st.mode !== "drag") {
-      if (st.y > 0 || st.vy !== 0) {
+      // сидит на блоке: страницу прокрутили — держится за его край, блок ушёл вниз — падает
+      if (st.perch) {
+        const h = perchHeight();
+        if (!h) st.perch = 0;
+        else if (st.vy === 0 && st.y < h && st.y >= st.perch - 2) st.y = h;
+        if (h) st.perch = h;
+      }
+      if (st.y > st.perch || st.vy !== 0) {
         st.vy -= G * dt;
         st.y += st.vy * dt;
         const ceil = vh() - FLOOR - W;
@@ -221,9 +283,10 @@ function createEngine(set) {
           if (st.x < 0) { st.x = 0; st.vx = Math.abs(st.vx) * 0.5; }
           if (st.x > VW - W) { st.x = VW - W; st.vx = -Math.abs(st.vx) * 0.5; }
         }
-        if (st.y <= 0) {
+        const ground = st.vy <= 0 ? st.perch : 0;
+        if (st.y <= ground) {
           const impact = -st.vy;
-          st.y = 0; st.vy = 0;
+          st.y = ground; st.vy = 0;
           if (st.mode === "air") {
             st.vx = 0;
             if (impact > 1150) { enter("dizzy", 2400); cluck("startle"); feathers(5, 1.2); } else enter("land", 380);
@@ -235,7 +298,7 @@ function createEngine(set) {
         const step = st.speed * dt;
         if (Math.abs(d) <= step) { st.x = st.tx; arrive(); } else { st.x += Math.sign(d) * step; st.dir = Math.sign(d); }
       }
-      if (st.mode === "party" && st.y === 0 && now > st.hopAt) {
+      if (st.mode === "party" && st.y === st.perch && now > st.hopAt) {
         st.vy = rnd(420, 560); st.hopAt = now + 360;
         if (Math.random() < 0.6) feathers(3, 0.8);
       }
@@ -254,7 +317,7 @@ function createEngine(set) {
     // раз в секунду: не стоит ли на кнопке
     if (now > st.checkAt) {
       st.checkAt = now + 900;
-      if (CALM.has(st.mode) && st.mode !== "walk" && grounded() && blocked(st.x)) {
+      if (CALM.has(st.mode) && st.mode !== "walk" && !st.perch && grounded() && blocked(st.x)) {
         const fx = freeX(st.x);
         if (fx != null) go("shoo", fx, WALK * 1.8);
       }
@@ -309,8 +372,8 @@ function createEngine(set) {
     }
     const sh = els.shadow;
     if (sh) {
-      const sc = 1 - Math.min(st.y / 320, 0.65);
-      sh.style.transform = `translate3d(${st.x}px, 0, 0) scale(${sc.toFixed(3)})`;
+      const sc = 1 - Math.min(Math.max(0, st.y - st.perch) / 320, 0.65);
+      sh.style.transform = `translate3d(${st.x}px, ${-st.perch}px, 0) scale(${sc.toFixed(3)})`;
       sh.style.opacity = (0.25 + 0.75 * sc).toFixed(2);
     }
   };
@@ -332,6 +395,7 @@ function createEngine(set) {
         cluck("startle");
       }
       if (st.mode === "drag") {
+        st.perch = 0;
         st.x = e.clientX - st.press.ox;
         st.y = Math.max(0, vh() - FLOOR - e.clientY - st.press.ob);
         st.samples.push({ x: e.clientX, y: e.clientY, t: now });
@@ -391,13 +455,13 @@ function createEngine(set) {
   const peep = () => { unlockAudio(); sfx("peep"); if (st.cy === 0) st.cvy = 280; };
 
   Object.assign(E, {
-    tick, apply, enter, go, say, cluck, feathers, party, panic, toAlert, clampX,
+    tick, apply, enter, go, say, cluck, feathers, party, panic, toAlert, clampX, guideAct,
     onDown, onMove, onUp, onCancel, onEnter, onLeave, hatch, peep, later,
   });
   return E;
 }
 
-function Hen({ rendering = false, progress = 0, over = false, error = "" }) {
+function Hen({ rendering = false, progress = 0, over = false, error = "", guide = null, guideStep = 0, onGuide = null }) {
   const idle = useIdle();
   const [mode, setMode] = useState("enter");
   const [talk, setTalk] = useState(false);
@@ -410,7 +474,21 @@ function Hen({ rendering = false, progress = 0, over = false, error = "" }) {
     api.current = createEngine({ mode: setMode, talk: setTalk, bubble: setBubble, helmet: setHelmet, egg: setEgg, chick: setChick });
   }
 
-  useEffect(() => { api.current.live = { rendering, over }; }, [rendering, over]);
+  const guideKey = guide ? `${guide.kind}|${guide.sel}|${guide.text || ""}` : "";
+  useEffect(() => { api.current.live = { rendering, over, guide, onGuide }; }, [rendering, over, guide, onGuide]);
+
+  // проводник: шаг сменился — подпрыгнула и пошла к новой кнопке
+  const prevStep = useRef(guideStep);
+  useEffect(() => {
+    const A = api.current, st = A.st;
+    if (!guideKey || rendering || over) return;
+    const busy = ["drag", "air", "flee", "hidden", "peek", "angry", "dizzy", "party", "panic", "sleep", "lay"].includes(st.mode);
+    if (busy) return;
+    if (guideStep !== prevStep.current && st.y === 0) { st.vy = 340; A.cluck("cluck"); }
+    prevStep.current = guideStep;
+    // кнопка могла ещё не встать на место после смены шага
+    A.later(() => { if (!["drag", "air", "flee", "hidden"].includes(st.mode)) A.guideAct(); }, 350);
+  }, [guideKey, guideStep, rendering, over]);
 
   // кадры анимации — только пока окно в фокусе (в игре курица замирает вместе со всем интерфейсом)
   useEffect(() => {

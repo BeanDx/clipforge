@@ -36,6 +36,9 @@ import { useChickenPrefs, setChickenPrefs } from "../features/chicken/prefs";
 import shotHudMatch from "../assets/previews/hud-match.webp";
 import shotHudDemo from "../assets/previews/hud-demo.webp";
 import "./highlight-renderer.css";
+import "./theme-lumen.css";
+import { THEMES, readTheme, applyTheme } from "./theme";
+import { WindowControls } from "./WindowControls";
 import { version as APP_VERSION } from "../../package.json";
 
 import { tr, trError, getLang, setLang, useLang } from "../i18n";
@@ -47,6 +50,17 @@ const DEMO_TAB = TABS.indexOf("Демо");
 const ARCHIVE_TAB = TABS.indexOf("Архив");
 const HIGHLIGHTS_TAB = TABS.indexOf("Хайлайты");
 const SETTINGS_TAB = TABS.indexOf("Настройки");
+// иконки вкладок: видны в теме Lumen, где вкладки идут меню слева
+const TAB_ICONS = {
+  "Главная": "M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z",
+  "Демо": "M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM10 9l5 3-5 3z",
+  "Архив": "M3 5h18v4H3zM5 9v10h14V9M10 13h4",
+  "Хайлайты": "M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z",
+  "Профиль": "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21c1-4 4-6 8-6s7 2 8 6",
+  "Очередь": "M4 6h16M4 12h16M4 18h10M18 16l3 2-3 2z",
+  "Библиотека": "M4 4h4v16H4zM10 4h4v16h-4zM16.5 4.5l3.5 1-3.5 14.5-3.5-1z",
+  "Настройки": "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z",
+};
 
 // Вкладки блока «Настройки клипа»
 const STUDIO_TABS = [
@@ -520,6 +534,14 @@ export default function HighlightRenderer() {
   const [faceitErr, setFaceitErr] = useState("");
   // мини-режим в трее: крестик прячет окно, статистика матчей пишется дальше (tray.rs)
   const chickPrefs = useChickenPrefs();
+  const [theme, setTheme] = useState(readTheme);
+  useEffect(() => applyTheme(theme), [theme]);
+  // В Lumen вкладка «Клипы» ведёт по шагам: моменты → вкладки настроек клипа → рендер.
+  // Новая демка (из архива, с главной, перетаскиванием) начинает с первого шага.
+  const wizard = theme === "lumen";
+  const [step, setStep] = useState(0);
+  const [stepDemo, setStepDemo] = useState(null);
+  if ((demo?.path ?? null) !== stepDemo) { setStepDemo(demo?.path ?? null); setStep(0); }
   const [closeToTray, setCloseToTray] = useState(() => { try { return localStorage.getItem("cf-close-to-tray") !== "0"; } catch { return true; } });
   useEffect(() => {
     try { localStorage.setItem("cf-close-to-tray", closeToTray ? "1" : "0"); } catch {}
@@ -1349,17 +1371,45 @@ const voicePayload = useMemo(() => {
   };
   const estSize = Math.round(((nClips * 14 + 10) * res.mbps) / 8);
 
+  // шаги пошагового режима (Lumen): моменты, вкладки «Настроек клипа», рендер
+  const wzSteps = [
+    { id: "moments", label: "Моменты", sum: nClips ? tr("выбрано {0}", nClips) : tr("выбери моменты") },
+    ...STUDIO_TABS.map((t) => ({ id: t.id, label: t.label, sum: studioSummary[t.id] })),
+    { id: "render", label: "Рендер", sum: rendering ? tr("идет...") : `≈ ${estSize} MB` },
+  ];
+  const wzReady = nClips > 0;
+  // без выбранных моментов дальше первого шага не пускаем
+  const wzStep = wzReady ? Math.min(step, wzSteps.length - 1) : 0;
+  const wzId = wzSteps[wzStep].id;
+  const wzIs = (id) => !wizard || wzId === id;
+  // курица-проводник: идёт к «Далее», на последнем шаге — к запуску; без путей стоит с вопросом
+  const missingPath = !paths.hlae ? "HLAE?" : !paths.cs2 ? "CS2?" : !paths.out ? tr("папка?") : null;
+  const chickGuide = !wizard || tab !== DEMO_TAB || demoMode !== "clips" || rendering || !wzReady ? null
+    : wzId !== "render" ? { kind: "next", sel: ".wz-nav__next" }
+    : missingPath ? { kind: "missing", sel: ".launch__btns .go:last-child", text: missingPath }
+    : canRender ? { kind: "render", sel: ".launch__btns .go:last-child" } : null;
+  const goStep = (i) => {
+    const n = Math.max(0, Math.min(wzSteps.length - 1, i));
+    setStep(n);
+    if (STUDIO_TABS.some((t) => t.id === wzSteps[n].id)) setStudioTab(wzSteps[n].id);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   const resetPaths = () => setPaths({ ...DEFAULT_PATHS, out: defaultOut });
 
   // Все настройки клипа — один блок с вкладками: короче страница, а сводка на вкладке показывает,
   // что включено, не открывая её. В режиме «Эдит» — только «Видео» и «Звук» (те же настройки, общие с клипами)
-  const renderStudio = (edit = false) => {
+  // only: одна вкладка без переключателя — шаг пошагового режима
+  const renderStudio = (edit = false, only = null) => {
     const tabsShown = edit ? STUDIO_TABS.filter((t) => t.id === "video" || t.id === "sound") : STUDIO_TABS;
-    const st = tabsShown.some((t) => t.id === studioTab) ? studioTab : "sound";
+    const st = only || (tabsShown.some((t) => t.id === studioTab) ? studioTab : "sound");
+    const onlyTab = only && STUDIO_TABS.find((t) => t.id === only);
     return (
-    <Frame title={edit ? tr("Настройки эдита") : tr("Настройки клипа")} meta={edit ? tr("видео и трек для эдита") : tr("все, что попадет в рендер")} className={`span-2 studio ${edit ? "studio--edit" : ""}`}
-      help={tr("Настройки разложены по вкладкам. Под названием каждой вкладки - коротко, что сейчас включено.")}>
-      <div className="studio__tabs" role="tablist" aria-label={tr("Настройки клипа")}>
+    <Frame title={onlyTab ? tr(onlyTab.label) : edit ? tr("Настройки эдита") : tr("Настройки клипа")}
+      meta={onlyTab ? studioSummary[only] : edit ? tr("видео и трек для эдита") : tr("все, что попадет в рендер")}
+      className={`span-2 studio ${edit ? "studio--edit" : ""} ${only ? "studio--step" : ""}`}
+      help={onlyTab ? null : tr("Настройки разложены по вкладкам. Под названием каждой вкладки - коротко, что сейчас включено.")}>
+      {!only && <div className="studio__tabs" role="tablist" aria-label={tr("Настройки клипа")}>
         {tabsShown.map((t) => (
           <button key={t.id} type="button" role="tab" aria-selected={st === t.id}
             className={st === t.id ? "is-on" : ""} onClick={() => setStudioTab(t.id)}>
@@ -1368,7 +1418,7 @@ const voicePayload = useMemo(() => {
             <small className="studio__sum mono">{studioSummary[t.id]}</small>
           </button>
         ))}
-      </div>
+      </div>}
 
       <div className="studio__body" key={st}>
         {st === "video" && (
@@ -1596,13 +1646,19 @@ const voicePayload = useMemo(() => {
           onTest={testRender} onStop={stopRender} rendering={rendering} progress={progress} stage={stage}
           onClose={() => setSetupOpen(false)} onOpenHighlights={() => setTab(HIGHLIGHTS_TAB)} />
       )}
-      <nav className="topbar">
-        <div className="brand"><i className="brand__mark" /><span>clipforge</span><em className="mono dim">cs2</em></div>
+      {/* окно без системной шапки: тянется за пустое место сверху и за шапку/меню */}
+      <div className="drag-strip" data-tauri-drag-region />
+      <WindowControls />
+      <nav className="topbar" data-tauri-drag-region>
+        <div className="brand" data-tauri-drag-region><i className="brand__mark" /><span data-tauri-drag-region>clipforge</span><em className="mono dim">cs2</em></div>
         <ul role="tablist" className="tabs">
           {TABS.map((t, i) => (
             <li key={t}>
               <button role="tab" aria-selected={tab === i} className={tab === i ? "is-active" : ""}
-                ref={(el) => (tabRefs.current[i] = el)} onClick={() => setTab(i)}>{tr(t)}</button>
+                ref={(el) => (tabRefs.current[i] = el)} onClick={() => setTab(i)} title={tr(t)}>
+                <svg className="tabs__ico" viewBox="0 0 24 24" aria-hidden="true"><path d={TAB_ICONS[t]} /></svg>
+                <span className="tabs__label">{tr(t)}</span>
+              </button>
             </li>
           ))}
           {ink && <li className="tabs__ink" aria-hidden="true" style={{ "--x": `${ink.left}px`, width: ink.width }} />}
@@ -1755,6 +1811,30 @@ const voicePayload = useMemo(() => {
             {error && <p className="mono err">{trError(error)}</p>}
           </Frame>
 
+          <Frame title={tr("Оформление")} meta={tr(THEMES.find((t) => t.id === theme)?.name ?? "")} className="span-2"
+            help={tr("Меняется сразу и запоминается: при следующем запуске окно откроется в том же виде.")}>
+            <div className="theme-pick" role="radiogroup" aria-label={tr("Оформление")}>
+              {THEMES.map((t) => (
+                <button key={t.id} type="button" role="radio" aria-checked={theme === t.id}
+                  className={`theme-card ${theme === t.id ? "is-on" : ""}`} onClick={() => setTheme(t.id)}>
+                  {t.id === "lumen" ? (
+                    <span className="theme-pv theme-pv--lumen" aria-hidden="true">
+                      <span className="pv-side"><i /><i /><i /><i /><i /></span>
+                      <span className="pv-body"><i /><i /><i /></span>
+                    </span>
+                  ) : (
+                    <span className="theme-pv theme-pv--hud" aria-hidden="true">
+                      <i className="pv-hz" /><span className="pv-top" />
+                      <span className="pv-body"><i /><i /></span>
+                    </span>
+                  )}
+                  <span className="theme-card__text"><b>{tr(t.name)}</b><span className="dim">{tr(t.desc)}</span></span>
+                  <span className="theme-card__check" aria-hidden="true" />
+                </button>
+              ))}
+            </div>
+          </Frame>
+
           <Frame title={tr("Язык")} meta={lang === "ru" ? "Русский" : "English"} className="span-2"
             help={tr("При первом запуске язык берется из системы. Переключается сразу, без перезапуска.")}>
             <div className="ratios lang-pick" role="radiogroup" aria-label={tr("Язык")}>
@@ -1882,8 +1962,25 @@ const voicePayload = useMemo(() => {
           <RenderCounter Frame={Frame} />
         </main>
       ) : (
-        <main className="grid" key="demo-clips">
+        <main className={`grid ${wizard ? "grid--wizard" : ""}`} key="demo-clips">
           {modeSwitch}
+          {wizard && (
+            <nav className="wz span-2" aria-label={tr("Шаги")}>
+              <ol className="wz__steps">
+                {wzSteps.map((s, i) => (
+                  <li key={s.id}>
+                    <button type="button" className={`wz__step ${i === wzStep ? "is-on" : ""} ${i < wzStep ? "is-done" : ""}`}
+                      aria-current={i === wzStep ? "step" : undefined} disabled={i > 0 && !wzReady} onClick={() => goStep(i)}>
+                      <span className="wz__num">{i < wzStep ? "✓" : i + 1}</span>
+                      <span className="wz__text"><b>{tr(s.label)}</b><small>{s.sum}</small></span>
+                    </button>
+                  </li>
+                ))}
+              </ol>
+              <span className="wz__bar" aria-hidden="true"><i style={{ width: `${(wzStep / (wzSteps.length - 1)) * 100}%` }} /></span>
+            </nav>
+          )}
+          {wzIs("moments") && <>
           <Frame title={tr("Демо-файл")} meta={demo ? tr("загружено") : tr("ожидание")} className="span-2">
             <div
               className={`drop ${over ? "is-over" : ""} ${demo ? "is-loaded" : ""}`}
@@ -2031,10 +2128,42 @@ const voicePayload = useMemo(() => {
               onRemove={(path) => setReel((l) => l.filter((e) => e.demo !== path))}
               onClear={() => setReel((l) => l.filter((e) => e.demo === demo?.path))} />
           )}
+          </>}
 
-          {renderStudio()}
+          {!wizard ? renderStudio() : STUDIO_TABS.some((t) => t.id === wzId) && renderStudio(false, wzId)}
 
-          <section className="launch span-2">
+          {wzIs("render") && wizard && (
+            <section className="wz-review span-2" aria-label={tr("Что попадет в рендер")}>
+              <button type="button" className="wz-review__item" onClick={() => goStep(0)}>
+                <span className="wz-review__ico" aria-hidden="true">★</span>
+                <b>{tr("Моменты")}</b>
+                <small className="mono dim">{nClips} {tr("клипов")}{multi ? tr(" из {0} демок", nDemos) : ""}</small>
+                <span className="wz-review__edit">{tr("изменить")}</span>
+              </button>
+              {STUDIO_TABS.map((t, i) => (
+                <button key={t.id} type="button" className="wz-review__item" onClick={() => goStep(i + 1)}>
+                  <span className="wz-review__ico" aria-hidden="true">{t.icon}</span>
+                  <b>{tr(t.label)}</b>
+                  <small className="mono dim">{studioSummary[t.id]}</small>
+                  <span className="wz-review__edit">{tr("изменить")}</span>
+                </button>
+              ))}
+            </section>
+          )}
+
+          {wizard && wzId !== "render" && (
+            <div className="wz-nav span-2">
+              <button type="button" className="go go--ghost wz-nav__back" disabled={wzStep === 0} onClick={() => goStep(wzStep - 1)}>← {tr("Назад")}</button>
+              <span className="wz-nav__hint mono dim">
+                {wzReady ? tr("шаг {0} из {1}", wzStep + 1, wzSteps.length) : tr("выбери хотя бы один момент, чтобы идти дальше")}
+              </span>
+              <button type="button" className="go wz-nav__next" disabled={!wzReady} onClick={() => goStep(wzStep + 1)}>
+                {tr("Далее: {0}", tr(wzSteps[wzStep + 1].label))} →
+              </button>
+            </div>
+          )}
+
+          {wzIs("render") && <section className="launch span-2">
             <div className="launch__info mono">
               <span>{nClips} {tr("клипов")}{multi && tr(" из {0} демок", nDemos)}</span>
               <span className="dim">≈ {estSize} MB</span>
@@ -2070,7 +2199,13 @@ const voicePayload = useMemo(() => {
                 <button type="button" className="go" disabled={!canRender} onClick={() => startRender(false, null, multi ? allPicked : null).catch(() => {})}>{tr("Запустить рендер")}</button>
               </div>
             )}
-          </section>
+          </section>}
+          {wizard && wzId === "render" && (
+            <div className="wz-nav span-2">
+              <button type="button" className="go go--ghost wz-nav__back" onClick={() => goStep(wzStep - 1)}>← {tr("Назад")}</button>
+              <span className="wz-nav__hint mono dim">{tr("все готово: проверь и запускай")}</span>
+            </div>
+          )}
         </main>
       )}
 
@@ -2091,7 +2226,8 @@ const voicePayload = useMemo(() => {
           </div>
         </div>
       )}
-      <Chicken rendering={rendering} progress={progress} over={over} error={error} />
+      <Chicken rendering={rendering} progress={progress} over={over} error={error}
+        guide={chickGuide} guideStep={wzStep} onGuide={() => setTab(SETTINGS_TAB)} />
     </div>
   );
 }

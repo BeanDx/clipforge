@@ -132,7 +132,7 @@ fn parse_web(html: &str) -> Vec<Friend> {
 static WEB: Mutex<Option<HashMap<String, (u64, Vec<Friend>)>>> = Mutex::new(None);
 fn now_ms() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64) }
 
-fn web_friends(steamid: &str) -> Result<Vec<Friend>, String> {
+pub(crate) fn web_friends(steamid: &str) -> Result<Vec<Friend>, String> {
     if let Some((at, l)) = WEB.lock().unwrap().as_ref().and_then(|c| c.get(steamid).cloned()) {
         if now_ms().saturating_sub(at) < 10 * 60_000 { return Ok(l); }
     }

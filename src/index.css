@@ -1,3 +1,11 @@
+/* акценты темы; .app и тема Lumen (src/app/theme-lumen.css) переопределяют их */
+:root {
+  --yellow: #f5c518;
+  --teal: #2ee6c0;
+  --y-rgb: 245, 197, 24;
+  --t-rgb: 46, 230, 192;
+}
+
 html, body {
   margin: 0;
   /* overflow: hidden; никаких браузерных скроллбаров окна, скролл только внутри .grid при необходимости */
@@ -18,14 +26,14 @@ input, textarea {
 }
 
 ::selection {
-  background: rgba(245, 197, 24, 0.35); /* если где-то выделение всё же разрешено — в цвет темы, не браузерный синий */
+  background: rgba(var(--y-rgb), 0.35); /* если где-то выделение всё же разрешено — в цвет темы, не браузерный синий */
 }
 
 a { -webkit-user-drag: none; }
 img { -webkit-user-drag: none; pointer-events: none; }
 /* экран ошибки вместо белого экрана (App.jsx) */
 .crash { min-height: 100vh; box-sizing: border-box; padding: 48px; display: flex; flex-direction: column; gap: 14px; background: #07090d; color: #d6dde6; font-family: "Rajdhani", system-ui, sans-serif; }
-.crash b { font-size: 1.6rem; color: #f5c518; }
+.crash b { font-size: 1.6rem; color: var(--yellow); }
 .crash pre { max-height: 50vh; overflow: auto; padding: 14px; background: #0c1016; border: 1px solid #2c3a4b; color: #e5484d; font: 12px/1.5 "JetBrains Mono", monospace; white-space: pre-wrap; }
 .crash .go { align-self: flex-start; }
 
