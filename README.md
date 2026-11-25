@@ -22,6 +22,17 @@ clipforge finds your best moments, lets you preview them in 3D, records them in-
 
 ## Features
 
+### 🌌 Lumen: a guided look
+Two looks to pick from in **Settings → Appearance**: the classic **Tactical** one and **Lumen**, with a sidebar menu, soft cards and a violet glow.
+- **Clips step by step**: Moments → Video → Effects → Camera → Sound → Skins → Render, with **Back / Next**. The bar on top shows what is set on every step, and any step is one click away
+- The last step sums up everything that goes into the render, and each card takes you back to its step
+- **The chicken shows the way**: it hops onto the panel next to **Next**, sits by **Start render** at the end, and if HLAE or CS2 is missing it stands there with a question. Click it to open Settings
+- **No Windows title bar**: the window buttons live in the app itself, drag the window by the empty space at the top or by the menu
+
+<p align="center"><img src="docs/screenshots/steps-en.webp" alt="Lumen: the render step with the chicken guide" width="100%"></p>
+
+<p align="center"><img src="docs/screenshots/themes-en.webp" alt="Settings: Tactical and Lumen looks" width="100%"></p>
+
 ### ✦ Smart moment picking
 Every round of every player gets a score and tags, the way highlight services do it, but using everything the demo has.
 
@@ -65,6 +76,7 @@ Press **3D** on any moment to watch it right in the app, before CS2 even starts.
 - A **killfeed** with the game's own icons: headshot, wallbang, through smoke, no-scope, blind, assists
 - **With orbit** plays the exact `mirv_campath` that goes to HLAE, so you see where the orbit camera will fly. **Free camera** shows that path as a yellow line
 - A timeline with kill marks, 0.25× / 0.5× / 1× speed and a compact info panel: FPS, tick, weapon, HP, speed, players alive
+- **Voice chat** from FACEIT and community server demos plays along with the moment (Valve matchmaking demos have no voice)
 
 <p align="center"><img src="docs/screenshots/preview3d-en.webp" alt="3D preview: player POV with the weapon, crosshair and killfeed" width="100%"></p>
 
@@ -81,6 +93,7 @@ Change weapon skins, the knife model and finish, and gloves. clipforge writes a 
 - Things the scoreboard doesn't show: crosshair codes (one click to copy), accuracy, counter-strafing, time to kill, opening duels, distance run, chat and server settings. Optional FACEIT levels with your own API key
 - **Profile**: Steam and FACEIT stats, form over the last 30 matches, maps, and what clipforge recorded while you played (hours, matches, weapons). Only matches on Valve servers and FACEIT count
 - **Achievements** in bronze, silver and gold, **Steam friends**, and a side-by-side **comparison** of any two players
+- **Match players** (experimental, off by default): during an MM or Premier game, Home shows both teams with Premier rating, FACEIT level, win rate, headshots and K/D, friends in a party marked with one color, possible smurfs, the best in the lobby and the win chances. It reads SteamIDs from CS2 memory, so turn it on at your own risk
 
 ### 🖼 Highlights gallery, player card and more
 - A gallery of finished clips with previews, sorting, filters and a built-in player
@@ -90,7 +103,7 @@ Change weapon skins, the knife model and finish, and gloves. clipforge writes a 
 - A notification when your highlight is ready
 - **First-run wizard**: finds CS2 in every Steam library, checks HLAE, the highlights folder and free space, and records a 5-second test clip
 - **Auto-updates** with a "What's new" window
-- A chicken lives at the bottom of the window. You can pet it, grab it and throw it, and it wears headphones while you render. It and its sounds can be turned off
+- A chicken lives at the bottom of the window. You can pet it, grab it and throw it, and it wears headphones while you render. In Lumen it walks you through the clip steps. It and its sounds can be turned off
 - English and Russian interface, switched live
 
 <table>
