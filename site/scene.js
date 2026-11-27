@@ -72,7 +72,7 @@ export function startScene(canvas, { lang = "ru" } = {}) {
   const setLang = (l) => {
     for (const p of panels) {
       const name = p.userData.name;
-      const file = `shots/${name}-${l}.webp`;
+      const file = `${new URL(".", import.meta.url).href}shots/${name}-${l}.webp`;
       loader.load(file, (tex) => {
         tex.colorSpace = THREE.SRGBColorSpace;
         tex.anisotropy = 4;

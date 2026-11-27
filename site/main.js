@@ -2,112 +2,50 @@
 // момента (те же правила, что src/features/demo/moments.js), актуальный релиз с GitHub.
 import { CONFIG } from "./config.js";
 import { buildMoments, tierOf } from "./moments.js";
+import { EN, UI } from "./i18n.js";
+// корень сайта: страница /en/ лежит уровнем ниже, а файлы — общие
+const ROOT = new URL(".", import.meta.url).href;
 
 const REPO = CONFIG.repo;
 // что из необязательного есть рядом (site/scan.mjs) — без запросов к файлам, которых нет
-const AVAIL = fetch("available.json", { cache: "no-store" }).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+const AVAIL = fetch(ROOT + "available.json", { cache: "no-store" }).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
 // ---------- языки ----------
-// русский текст — прямо в разметке, здесь только английский
-const EN = {
-  "nav.how": "How it works", "nav.score": "Moments", "nav.features": "Features", "nav.deps": "Requirements", "nav.faq": "FAQ", "nav.dl": "Download",
-  "hero.kicker": "free · local · open source", "hero.t1": "CS2 demos", "hero.t2": "highlight edits", "hero.t3": "in one click",
-  "hero.sub": "clipforge finds your best moments, records them in-game through HLAE and adds slow-mo, music with 3D lyrics, skins and a victim POV replay. No video editor needed.",
-  "hero.dl": "Download for Windows", "hero.how": "How it works ↓", "hero.scroll": "scroll",
-  "how.title": "From <code>.dem</code> to <code>.mp4</code>", "how.sub": "Five steps. You do two of them: drop a demo and press F10.",
-  "st.kills": "kills", "st.rounds": "rounds", "st.players": "players", "st.f10": "start recording",
-  "s0.t": "Drop a demo", "s0.d": "FACEIT, matchmaking, Premier or SourceTV from community servers. FACEIT demos can be downloaded right inside the app.",
-  "s1.t": "The demo is parsed", "s1.d": "demoparser2 pulls every kill, damage event, position, round and loadout. Plus a match dossier: crosshair codes, counter-strafing, TTK, opening duels.",
-  "s2.t": "Moments pick themselves", "s2.d": "Every round of every player gets a score: multi-kills, real 1vN clutches, wallbangs, no-scopes, ecos, ninja defuses. The best are already selected.",
-  "s3.t": "CS2 records the frames", "s3.d": "The game launches through HLAE, you press F10 and frames are recorded straight from the engine. Alt-tab and do something else meanwhile.",
-  "s4.t": "ffmpeg builds the edit", "s4.d": "Slow-mo, music, 3D lyrics, kill flashes, headshot zoom and the victim POV replay. You get a notification, the clip is in the gallery.",
-  "sc.title": "Build your own moment", "sc.sub": "The same rules and points clipforge uses inside. Try to reach Legendary.",
-  "sc.kills": "kills this round", "sc.hs": "headshots", "sc.clutch": "clutch", "sc.none": "no", "sc.style": "how", "sc.result": "moment score",
-  "tg.wall": "wallbang", "tg.smoke": "through smoke", "tg.air": "mid-air", "tg.blind": "while blind", "tg.knife": "knife", "tg.fast": "within 3 s",
-  "tg.opening": "opening kill", "tg.eco": "on an eco", "tg.decisive": "deciding round", "tg.ninja": "ninja defuse",
-  "ft.title": "Looks like an edit, not a screen recording",
-  "f1.t": "Smart moment picking", "f1.d": "Multi-kills with a speed bonus, 1vN clutches, wallbangs, no-scopes, ecos and pistol rounds. Tiers from Good to Legendary.",
-  "f2.t": "Slow-mo, flashes, beat", "f2.d": "Smooth slow motion around kills, audio through Rubber Band, kill flash, headshot zoom, shake on the bass.",
-  "f3.t": "3D lyrics in the map", "f3.d": "Lyrics come from LRCLIB or get timed by a local Whisper. They float inside the map, the chorus lands on your last kill.",
-  "f4.t": "Through the victim's eyes", "f4.d": "After the clip every kill replays from the POV of the player you killed. Plus an orbit camera after the final kill.",
-  "f5.t": "Any skins", "f5.d": "Weapons, knife and gloves are swapped in a copy of the demo. Your inventory and game files stay untouched.",
-  "f6.t": "Match dossier and player card", "f6.d": "One-click crosshair codes, accuracy, counter-strafing, TTK, opening duels. A 1080×1920 card for stories and Discord.",
-  "f7.t": "Gallery and before / after", "f7.d": "Every clip with previews, filters and a player. A slider: raw demo vs the finished clip.",
-  "f8.t": "Doesn't get in the way", "f8.d": "Live match data, highlight bookmarks on F8, tray mode. In game clipforge barely uses anything: 1005 vs 977 FPS.",
-  "sh.title": "Inside the app", "sh.demo": "Demo", "sh.moments": "Moments", "sh.fx": "Effects", "sh.gallery": "Highlights", "sh.overlay": "Over the game", "sh.settings": "Settings",
-  "dp.title": "Requirements", "dp.sub": "The app installs almost everything itself. You need Windows and CS2.",
-  "dp.need": "required", "dp.auto": "downloads itself", "dp.in": "in the installer", "dp.sys": "already in Windows", "dp.opt": "optional",
-  "dp.win": "64-bit", "dp.cs": "From Steam, found automatically", "dp.hlae": "Records frames from the engine", "dp.ff": "Builds the video, NVENC / AMF / Quick Sync",
-  "dp.node": "Demo parsing", "dp.wv": "The app's interface", "dp.wh": "Times song lyrics, ~170 MB on first use", "dp.fc": "FACEIT levels and elo, free key",
-  "dl.title": "Grab it, it's free", "dl.btn": "Download installer", "dl.msi": "MSI package", "dl.all": "all releases", "dl.src": "source code",
-  "dl.note": "Updates arrive inside the app on their own.",
-  "fq.title": "FAQ",
-  "q1": "Will I get VAC banned?", "a1": "CS2 starts through HLAE with <code>-insecure</code>: VAC is off for that session and you can't join secured servers with it. clipforge only plays demos on your PC. The game closes itself after the render. Before matchmaking, just start CS2 as usual.",
-  "q2": "Does FPS drop with the app open?", "a2": "Barely: 1005 vs 977 FPS on average, about 3%, within normal variance. While you're in game clipforge pauses its animations and uses ~0% CPU and ~270 MB of RAM.",
-  "q3": "Which demos work?", "a3": "CS2 demos from FACEIT, Valve matchmaking and Premier, and SourceTV demos from community servers.",
-  "q4": "Can anyone see the changed skins?", "a4": "No. clipforge writes a modified copy of the demo and records from it. Your inventory, the game and the original demo stay as they were.",
-  "q5": "Do I need a FACEIT API key?", "a5": "No. It's only for FACEIT levels and elo. Everything else works without it.",
-  "q6": "How much does it cost?", "a6": "Nothing. clipforge is free and open source under MIT. Video renders on your own PC: no queues, no subscriptions, no quality limits.",
-  "q7": "Is it an Allstar or Medal alternative?", "a7": "Same goal: CS2 highlights without manual editing. The difference is that clipforge works from the demo on your own PC: no server queue and no subscription, any resolution and FPS. Plus things you usually don't get: music with 3D lyrics, skin changes and a victim POV replay.",
-  "foot": "MIT · not affiliated with Valve. Counter-Strike is a trademark of Valve Corporation.",
-  "rl.title": "This is the result", "rl.sub": "Not edited in a video editor. A demo, the Night Edit preset and one button.",
-  "ba.before": "raw demo", "ba.after": "clipforge",
-  "rl.note": "Lyrics in any language — this edit uses a Russian track",
-  "dm.title": "Drop your own demo", "dm.sub": "Parsing happens right in your browser, the file is never uploaded. See your best moments the way clipforge sees them.",
-  "dm.drop": "drag it here or click", "dm.where": "FACEIT, matchmaking, Premier, SourceTV", "dm.player": "player",
-  "dm.cta": "To turn these moments into a video with effects and music, you need the app.", "dm.btn": "Download clipforge", "dm.again": "another demo",
-  "ly.title": "Lyrics right inside the map", "ly.sub": "Type a line and it stands up in 3D like in a clip: word by word, on the beat.",
-  "ly.accent": "accent", "ly.neon": "neon", "ly.clean": "clean", "ly.go": "▶ play",
-  "in.title": "Install in a minute", "in.1t": "Run the installer", "in.1d": "The <code>clipforge_x.y.z_x64-setup.exe</code> file from Downloads.",
-  "in.2t": "Windows may warn you", "in.2d": "The installer doesn't have a paid code-signing certificate yet, so SmartScreen shows a blue window. Click <b>More info</b>, then <b>Run anyway</b>.",
-  "ss.h": "Windows protected your PC", "ss.p": "Microsoft Defender SmartScreen prevented an unrecognized app from starting. Running this app might put your PC at risk.",
-  "ss.more": "More info", "ss.app": "App:", "ss.pub": "Publisher:", "ss.unk": "Unknown publisher", "ss.run": "Run anyway", "ss.no": "Don't run",
-  "in.3t": "Check the file if you like", "in.3d": "The hash should match the one above. In PowerShell:", "in.copy": "copy", "in.3e": "The source is open: you can build the installer yourself.",
-  "in.4t": "Open a demo", "in.4d": "HLAE and ffmpeg download themselves on first launch and CS2 paths are found automatically. Drop a <code>.dem</code> on the Demo tab.",
-  "nw.title": "What's new", "nw.sub": "clipforge updates often. The latest releases from GitHub:", "nw.all": "full release history →",
-  "cm.title": "Join in", "cm.sub": "Share your clips, suggest features, report bugs.",
-};
-const UI = {
-  ru: { copied: "скопировано", newest: "новое", more: "показать полностью", less: "свернуть", demoStages: { load: "загружаю парсер...", read: "читаю файл...", header: "заголовок...", deaths: "киллы...", rounds: "раунды...", teams: "составы и экипировка...", defuses: "дефьюзы...", score: "считаю моменты..." },
-    demoErr: "Не получилось разобрать демку: {0}. Попробуй другую или открой её в приложении.", noMoments: "У этого игрока нет моментов, которые попали бы в клипы.", moments: "{0} моментов", round: "раунд",
-    lyr: "Я собрал тебя заново из кусков", mb: "МБ", latest: "последний релиз", tiers: ["Обычный", "Хорошо", "Топ", "Эпик", "Легенда"], skip: "одиночный фраг попадёт в клипы от 22 баллов",
-    noClip: "такой момент не попадёт в клипы", inClip: "попадёт в клипы", title: "clipforge — хайлайты CS2 из демок в один клик, бесплатно", desc: "Бесплатная программа для хайлайтов CS2: кидаешь демку, получаешь готовый эдит для TikTok и YouTube. Умная выборка моментов, slow-mo, музыка с 3D-текстом песни, скины, повтор глазами убитого. Локально, без подписки, open source.", fast: (s) => `за ${s} с`, m: "м" },
-  en: { copied: "copied", newest: "new", more: "show all", less: "collapse", demoStages: { load: "loading the parser...", read: "reading the file...", header: "header...", deaths: "kills...", rounds: "rounds...", teams: "teams and loadouts...", defuses: "defuses...", score: "scoring moments..." },
-    demoErr: "Couldn't parse this demo: {0}. Try another one or open it in the app.", noMoments: "This player has no moments that would make the clips.", moments: "{0} moments", round: "round",
-    lyr: "Built you again from the pieces", mb: "MB", latest: "latest release", tiers: ["Ordinary", "Good", "Top", "Epic", "Legendary"], skip: "a single kill makes the clips from 22 points",
-    noClip: "this moment won't make the clips", inClip: "makes the clips", title: "clipforge — free CS2 highlight maker: demos to edits in one click", desc: "Free CS2 highlight maker: drop a demo, get a ready-to-post edit for TikTok and YouTube. Smart moment picking, slow-mo, music with 3D lyrics, skins, victim POV replay. Local, no subscription, open source.", fast: (s) => `in ${s} s`, m: "m" },
-};
 const RU = {};
 $$("[data-i18n]").forEach((el) => { RU[el.dataset.i18n] = el.innerHTML; });
 
-// язык: ?lang= в адресе (так поисковики видят обе версии) → выбор посетителя → язык системы
-let lang = (() => {
+// у каждого языка свой адрес: корень — русский, en/ — английский (поисковики видят обе версии
+// как отдельные страницы). Язык страницы задан в разметке, переключатель ведёт на другой адрес.
+const lang = document.documentElement.lang === "en" ? "en" : "ru";
+const PAGE_URL = { ru: ROOT, en: ROOT + "en/" };
+const LANG_KEY = "cf-site-lang";
+const goLang = (l) => location.replace(PAGE_URL[l] + location.hash);
+{
+  // старые ссылки ?lang= и выбор посетителя; по языку системы — только при заходе на корень.
+  // Поисковых роботов не перекидываем, иначе они не увидят русскую страницу
   const q = new URLSearchParams(location.search).get("lang");
-  if (q === "ru" || q === "en") return q;
-  try { const s = localStorage.getItem("cf-site-lang"); if (s === "ru" || s === "en") return s; } catch { /* приватный режим */ }
-  return /^(ru|uk|be|kk)/i.test(navigator.language || "") ? "ru" : "en";
-})();
+  let saved = null;
+  try { saved = localStorage.getItem(LANG_KEY); } catch { /* приватный режим */ }
+  const bot = /bot|crawl|spider|slurp|lighthouse/i.test(navigator.userAgent);
+  const want = q === "ru" || q === "en" ? q
+    : saved === "ru" || saved === "en" ? saved
+    : lang === "ru" && !bot && !/^(ru|uk|be|kk)/i.test(navigator.language || "") ? "en" : lang;
+  if (q) { try { localStorage.setItem(LANG_KEY, q); } catch { /* не страшно */ } }
+  if (want !== lang) goLang(want);
+  else if (q) history.replaceState(null, "", PAGE_URL[lang] + location.hash);
+}
 let scene = null;
 
 function applyLang(l) {
-  lang = l;
-  document.documentElement.lang = l;
-  document.title = UI[l].title;
-  document.querySelector('meta[name="description"]').content = UI[l].desc;
-  document.querySelector('link[rel="canonical"]').href = `https://beandx.github.io/clipforge/?lang=${l}`;
-  // адрес меняется без перезагрузки, чтобы ссылкой делились на нужном языке
-  const u = new URL(location.href);
-  if (u.searchParams.get("lang") !== l) { u.searchParams.set("lang", l); history.replaceState(null, "", u); }
   $$("[data-i18n]").forEach((el) => {
     const v = l === "en" ? EN[el.dataset.i18n] : RU[el.dataset.i18n];
     if (v != null && el.innerHTML !== v) el.innerHTML = v;
   });
   $$("#lang b").forEach((b) => b.classList.toggle("on", b.dataset.l === l));
-  $$("img[data-shot]").forEach((img) => { img.src = `shots/${img.dataset.shot}-${l}.webp`; });
+  $$("img[data-shot]").forEach((img) => { img.src = `${ROOT}shots/${img.dataset.shot}-${l}.webp`; });
   scene?.setLang(l);
-  try { localStorage.setItem("cf-site-lang", l); } catch { /* не страшно */ }
   renderRelease();
   renderNews();
   renderDemo();
@@ -116,7 +54,12 @@ function applyLang(l) {
   if (lyr && !lyrTouched) { $("#lyrInput").value = UI[l].lyr; playLyrics(); }
 }
 const fmt = (s, ...a) => s.replace(/\{(\d)\}/g, (_, i) => a[i]);
-$("#lang").addEventListener("click", () => applyLang(lang === "ru" ? "en" : "ru"));
+$("#lang").addEventListener("click", (e) => {
+  e.preventDefault();
+  const l = lang === "ru" ? "en" : "ru";
+  try { localStorage.setItem(LANG_KEY, l); } catch { /* не страшно */ }
+  goLang(l);
+});
 
 // ---------- 3D ----------
 (async () => {
@@ -291,7 +234,7 @@ $$("#shotTabs button").forEach((b) => b.addEventListener("click", () => {
   img.classList.add("swap");
   setTimeout(() => {
     img.dataset.shot = b.dataset.s;
-    img.src = `shots/${b.dataset.s}-${lang}.webp`;
+    img.src = `${ROOT}shots/${b.dataset.s}-${lang}.webp`;
     img.onload = () => img.classList.remove("swap");
   }, 180);
 }));
@@ -372,13 +315,13 @@ reelV.addEventListener("error", () => { $("#reel").hidden = true; numberSections
 // поэтому в английской версии подписываем, что текст песни бывает на любом языке
 const reelHas = {};
 async function setReel(l) {
-  const own = `media/reel-${l}.mp4`;
+  const own = `${ROOT}media/reel-${l}.mp4`;
   if (reelHas[l] === undefined) reelHas[l] = !!(await AVAIL).reel?.[l];
   if (l !== lang) return;
-  const src = reelHas[l] ? own : "media/reel.mp4";
+  const src = reelHas[l] ? own : ROOT + "media/reel.mp4";
   $("#reelNote").hidden = reelHas[l] || l === "ru";
   if (!reelV.src.endsWith(src)) {
-    reelV.poster = reelHas[l] ? `media/reel-${l}.jpg` : "media/reel.jpg";
+    reelV.poster = reelHas[l] ? `${ROOT}media/reel-${l}.jpg` : ROOT + "media/reel.jpg";
     reelV.src = src;
     if (!reelV.dataset.paused) reelV.play().catch(() => {});
   }
@@ -391,7 +334,7 @@ $("#reelPlay").addEventListener("click", () => {
 (async () => {
   if (!(await AVAIL).beforeAfter) return;
   const before = $("#baBefore"), after = $("#baAfter"), frame = $("#baFrame"), handle = $("#baHandle");
-  before.src = "media/before.mp4"; after.src = "media/after.mp4";
+  before.src = ROOT + "media/before.mp4"; after.src = ROOT + "media/after.mp4";
   $("#ba").hidden = false;
   // держим два видео синхронно
   new IntersectionObserver(([e]) => { if (e.isIntersecting) { before.currentTime = after.currentTime; before.play().catch(() => {}); after.play().catch(() => {}); } else { before.pause(); after.pause(); } }, { threshold: 0.3 }).observe(frame);
@@ -487,7 +430,7 @@ function busy(stage, k) {
 async function analyze(file) {
   if (!/\.dem$/i.test(file.name)) return;
   busy("read", 0.02);
-  const worker = new Worker("demo-worker.js");
+  const worker = new Worker(ROOT + "demo-worker.js");
   const buffer = await file.arrayBuffer();
   worker.onmessage = (e) => {
     const m = e.data;

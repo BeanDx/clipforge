@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildEn } from "./build-en.mjs";
 
 const SITE = dirname(fileURLToPath(import.meta.url));
 const DOCS = join(SITE, "..", "docs");
@@ -19,7 +20,10 @@ createServer(async (req, res) => {
     : /^[\\/]banner\.webp$/.test(safe) ? join(DOCS, "banner.webp")
     : join(SITE, safe);
   try {
-    const body = await readFile(file);
+    // английская страница собирается из русской на лету, как при деплое (build-en.mjs)
+    const body = /^[\\/]en[\\/]index\.html$/.test(safe)
+      ? Buffer.from(buildEn(await readFile(join(SITE, "index.html"), "utf8")))
+      : await readFile(file);
     const head = { "content-type": TYPES[extname(file)] || "application/octet-stream", "cache-control": "no-store", "accept-ranges": "bytes" };
     // видео браузер просит кусками (Range) — без этого не работают перемотка и зацикливание
     const m = /bytes=(\d*)-(\d*)/.exec(req.headers.range || "");

@@ -42,7 +42,7 @@ code { font-family: var(--mono); font-size: .88em; color: var(--teal); }
 .nav__links a:hover, .nav__links a.is-on { color: #fff; }
 .nav__links a.is-on::after { transform: scaleX(1); }
 .nav__right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
-.lang { background: none; border: 1px solid var(--line-hi); padding: 6px 10px; display: flex; gap: 4px; color: var(--dim); }
+.lang { text-decoration: none; background: none; border: 1px solid var(--line-hi); padding: 6px 10px; display: flex; gap: 4px; color: var(--dim); }
 .lang b { font-weight: 600; transition: color .2s; }
 .lang b.on { color: var(--yellow); }
 .gh { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid var(--line-hi); color: var(--text); transition: border-color .2s; }

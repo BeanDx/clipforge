@@ -32,6 +32,8 @@ jobs:
           rsync -a --exclude "*.mjs" --exclude "*.cmd" --exclude "README.md" site/ _site/
           cp docs/screenshots/*.webp _site/shots/
           cp docs/banner.webp _site/
+          # английская страница en/ из русской + переводов i18n.js
+          node site/build-en.mjs _site
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
