@@ -5,6 +5,10 @@ mod voice;
 mod friends;
 mod display;
 mod ffmpeg;
+mod fps;
+mod fps_bench;
+mod fps_procs;
+mod fps_video;
 mod gallery;
 mod gsi;
 mod hlae;
@@ -115,7 +119,17 @@ pub fn run() {
       setup::setup_scan,
       display::ultra_check,
       valve::valve_recent,
-      valve::valve_download
+      valve::valve_download,
+      fps::fps_check,
+      fps::fps_fix,
+      fps::fps_open_settings,
+      fps_video::fps_video,
+      fps_video::fps_video_apply,
+      fps_video::fps_video_restore,
+      fps_procs::fps_processes,
+      fps_procs::fps_kill,
+      fps_bench::fps_bench_start,
+      fps_bench::fps_bench_cancel
     ])
     // крестик прячет окно в трей (если так выбрано в настройках)
     .on_window_event(|window, event| {

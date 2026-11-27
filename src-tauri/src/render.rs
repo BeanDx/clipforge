@@ -142,6 +142,9 @@ pub struct Job {
     xray: bool,
     #[serde(default)]
     hide_demo_ui: bool,
+    // «Картошка»: графика без освещения и с упрощёнными моделями (POTATO_CMDS), как в мем-эдитах из ТТ
+    #[serde(default)]
+    potato: bool,
     // "full" — HUD как в демке, "killfeed" — только килфид. "match" (свой HUD игрока) пока не реализован.
     #[serde(default)]
     hud: String,
@@ -192,6 +195,11 @@ fn yes() -> bool { true }
 
 // Переход между клипами в ролике, секунды (тот же REEL_XFADE во фронтенде — на него сдвинут трек)
 const REEL_XFADE: f64 = 0.35;
+// «Картошка»: чит-квары CS2 (в демке работают с sv_cheats 1). Освещение и тени выключены — стены
+// светятся ровным цветом текстуры, без карт нормалей поверхности плоские, текстуры мыльные,
+// модели с самым грубым LOD. Игра после рендера закрывается, так что возвращать их не нужно.
+const POTATO_CMDS: &str = "sv_cheats 1\nmat_fullbright 1\nmat_disable_normal_mapping 1\nr_texture_stream_mip_bias 3\nsc_force_lod_level 3\n";
+const POTATO_GRADE: &str = "eq=contrast=1.3:saturation=1.5:gamma=0.8";
 
 // Длина видео по выводу ffmpeg
 fn media_duration(ff: &Path, path: &Path) -> Option<f64> {
@@ -590,6 +598,9 @@ fn post_filter(j: &Job, cl: &Clip, has_audio: bool, rubberband: bool, hud: Optio
         cur = "vu";
     }
     if j.blur { head += &format!("[{cur}]tmix=frames=3[vb];"); cur = "vb"; }
+    // «Картошка»: mat_fullbright даёт бледную пересвеченную картинку (экспозицию игры командами
+    // не поправить) — возвращаем контраст и сочный цвет. До своего HUD, чтобы его цвета не менялись
+    if j.potato { head += &format!("[{cur}]{POTATO_GRADE}[vp];"); cur = "vp"; }
     if let Some(idx) = hud {
         head += &format!("[{cur}][{idx}:v]overlay=0:0:format=auto[vh];");
         cur = "vh";
@@ -852,6 +863,8 @@ fn build_cfg(j: &Job, rec_fps: u32, work: &Path, cfg_dir: &Path) -> (String, Str
             None => voice.clone(),
         };
         if cl.voice.is_some() { sky_on += &voice; }
+        // в начале каждого клипа: после playdemo следующей демки чит-квары сбрасываются
+        if j.potato { sky_on += POTATO_CMDS; }
         files.push((
             format!("cf_{}_s", i),
             format!("{sky_on}spec_player {}\nmirv_streams record start\n", cl.slot),

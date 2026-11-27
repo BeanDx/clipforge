@@ -51,6 +51,20 @@ function pump() {
   }
 }
 
+// пока крутят колесо, плитки не ловят наведение: иначе каждая, что проезжает под курсором,
+// запускает hover-анимацию и видео-превью, и прокрутка дёргается
+let lastScroll = 0;
+let scrollTimer = 0;
+if (typeof window !== "undefined") {
+  window.addEventListener("scroll", () => {
+    lastScroll = Date.now();
+    document.documentElement.classList.add("is-scrolling");
+    clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(() => document.documentElement.classList.remove("is-scrolling"), 150);
+  }, { capture: true, passive: true });
+}
+const HOVER_DELAY = 400;
+
 function KillBadge({ kills }) {
   if (!kills) return null;
   return <span className={`gl-kills gl-kills--${Math.min(kills, 5)}`}>{kills >= 5 ? "ACE" : `${kills}K`}</span>;
@@ -60,6 +74,19 @@ function Tile({ clip, meta, onMeta, hlae, onOpen, i }) {
   const ref = useRef(null);
   const vid = useRef(null);
   const [hover, setHover] = useState(false);
+  const hoverTimer = useRef(0);
+  // видео-превью — только если курсор задержался на плитке и колесо не крутят
+  const enter = () => {
+    clearTimeout(hoverTimer.current);
+    const tick = () => {
+      const wait = HOVER_DELAY - (Date.now() - lastScroll);
+      if (wait > 0) hoverTimer.current = setTimeout(tick, wait);
+      else setHover(true);
+    };
+    hoverTimer.current = setTimeout(tick, HOVER_DELAY);
+  };
+  const leave = () => { clearTimeout(hoverTimer.current); setHover(false); };
+  useEffect(() => () => clearTimeout(hoverTimer.current), []);
   // превью запрашиваем, только когда плитка видна
   useEffect(() => {
     if (meta) return;
@@ -83,7 +110,7 @@ function Tile({ clip, meta, onMeta, hlae, onOpen, i }) {
 
   return (
     <button ref={ref} type="button" className="gl-tile" style={{ "--i": i }} onClick={onOpen}
-      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+      onMouseEnter={enter} onMouseLeave={leave}>
       <span className="gl-thumb">
         {meta?.thumb ? <img src={`${convertFileSrc(meta.thumb)}?v=${clip.modified}`} alt="" loading="lazy" /> : <i className="gl-skel" />}
         {hover && <video ref={vid} src={convertFileSrc(clip.path)} muted playsInline preload="metadata" />}

@@ -42,7 +42,13 @@ fn own() -> Option<PathBuf> {
 // ffmpeg для обработки клипов
 pub fn find(hlae: &str) -> Option<PathBuf> {
     let dir = hlae_dir(hlae);
-    dir.as_deref().and_then(hlae_bin).or_else(|| dir.as_deref().and_then(from_ini)).or_else(own)
+    dir.as_deref().and_then(hlae_bin).or_else(|| dir.as_deref().and_then(from_ini)).or_else(own).or_else(installed)
+}
+
+// ffmpeg из установленного HLAE: программа перешла на свою копию HLAE (в её zip ffmpeg нет),
+// а у старой установки он уже лежит — не качаем второй раз
+fn installed() -> Option<PathBuf> {
+    [r"C:\Program Files (x86)\HLAE", r"C:\Program Files\HLAE"].iter().find_map(|d| hlae_bin(Path::new(d)))
 }
 
 // ffmpeg, который надо явно передать HLAE для записи (его нет в HLAE\ffmpeg\bin) — или None,
@@ -50,7 +56,7 @@ pub fn find(hlae: &str) -> Option<PathBuf> {
 pub fn for_hlae(hlae: &str) -> Option<PathBuf> {
     let dir = hlae_dir(hlae)?;
     if hlae_bin(&dir).is_some() { return None; }
-    from_ini(&dir).or_else(own)
+    from_ini(&dir).or_else(own).or_else(installed)
 }
 
 // Строки cfg для настройки записи HLAE name с выходными параметрами out (как у mirv_streams settings

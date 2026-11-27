@@ -1,0 +1,85 @@
+/* Вкладка «FPS» (FpsOptimizer.jsx) */
+.fps { display: flex; flex-direction: column; }
+.fps-row {
+  display: grid; grid-template-columns: 10px minmax(0, 1fr) auto auto; align-items: center; gap: 14px;
+  padding: 12px 0; border-bottom: 1px solid var(--line);
+}
+.fps-row:last-of-type { border-bottom: 0; }
+.fps-row__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 8px var(--teal); }
+.fps-row.is-warn .fps-row__dot { background: var(--yellow); box-shadow: 0 0 8px var(--yellow); }
+.fps-row.is-bad .fps-row__dot { background: var(--red); box-shadow: 0 0 8px var(--red); }
+.fps-row.is-info .fps-row__dot { background: var(--line-hi); box-shadow: none; }
+.fps-row__text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.fps-row__title { font-size: .92rem; }
+.fps-row__hint { font-size: .78rem; line-height: 1.45; }
+.fps-row__value { font-size: .84rem; white-space: nowrap; }
+.fps-row.is-warn .fps-row__value { color: var(--yellow); }
+.fps-row.is-bad .fps-row__value { color: var(--red); }
+.fps-row__act { display: flex; gap: 8px; justify-content: flex-end; min-width: 0; }
+.fps-row__act:empty { display: none; }
+.fps__foot { display: flex; justify-content: flex-end; padding-top: 12px; }
+.fps__sub { padding-left: 24px; border-top: 1px solid var(--line); }
+
+/* замер */
+.bench { display: flex; flex-direction: column; gap: 16px; }
+.bench__ctl { display: flex; gap: 12px; align-items: center; }
+.bench__demo {
+  flex: 1; min-width: 0; height: 40px; padding: 0 12px; border-radius: 8px;
+  background: transparent; color: inherit; border: 1px solid var(--line); font-size: .84rem;
+}
+.bench__demo option { background: #15151c; }
+.bench__ctl .go { flex: none; padding: 0 22px; height: 40px; }
+.bench__stage { margin: 0; }
+.bench__now { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.bench__big {
+  display: flex; flex-direction: column; gap: 4px; padding: 14px 16px;
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.bench__num { font-size: 2.1rem; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.bench__big .dim { font-size: .76rem; }
+.bench__delta { font-size: .84rem; }
+.bench__delta.is-up { color: var(--teal); }
+.bench__delta.is-down { color: var(--red); }
+.bench__hist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.bench__hist li {
+  display: grid; grid-template-columns: 110px minmax(80px, 1fr) 80px 70px minmax(0, 1.2fr); gap: 12px; align-items: center;
+  font-size: .8rem;
+}
+.bench__bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.bench__bar i { display: block; height: 100%; background: var(--line-hi); border-radius: 3px; }
+.bench__hist li.is-best .bench__bar i { background: var(--teal); }
+.bench__note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* графика */
+.cs2gfx { display: flex; flex-direction: column; gap: 14px; }
+.cs2gfx__presets { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.cs2gfx__preset {
+  display: flex; flex-direction: column; gap: 4px; align-items: flex-start; text-align: left;
+  padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line); background: transparent; color: inherit;
+  cursor: pointer; transition: border-color .15s, box-shadow .15s;
+}
+.cs2gfx__preset > span:first-child { font-size: .92rem; }
+.cs2gfx__preset .dim { font-size: .74rem; line-height: 1.4; }
+.cs2gfx__preset:hover:not(:disabled), .cs2gfx__preset:focus-visible { border-color: var(--teal); box-shadow: 0 0 14px rgba(var(--t-rgb), .25); }
+.cs2gfx__preset:disabled { opacity: .45; cursor: default; }
+.cs2gfx__preset--back:hover:not(:disabled) { border-color: var(--yellow); box-shadow: none; }
+.cs2gfx__table { display: flex; flex-direction: column; }
+.cs2gfx__row {
+  display: grid; grid-template-columns: minmax(150px, 1.1fr) minmax(130px, 1fr) 80px minmax(0, 2.2fr); gap: 14px;
+  padding: 9px 6px; border-bottom: 1px solid var(--line); font-size: .84rem; line-height: 1.4; align-items: baseline;
+  border-radius: 6px; transition: background .15s;
+}
+.cs2gfx__row:last-child { border-bottom: 0; }
+.cs2gfx__row--head { font-size: .72rem; padding-top: 0; }
+.cs2gfx__row .dim { font-size: .78rem; }
+.cs2gfx__row em { font-style: normal; color: var(--teal); }
+.cs2gfx__row.is-change { background: rgba(var(--t-rgb), .07); }
+.cs2gfx__cost.is-high { color: var(--red); }
+.cs2gfx__cost.is-mid { color: var(--yellow); }
+.cs2gfx__cost.is-low { color: var(--teal); }
+.cs2gfx__cost.is-none { opacity: .5; }
+
+/* живое обновление фоновых программ */
+.live-meta { display: inline-flex; align-items: center; gap: 7px; }
+.live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 6px var(--teal); animation: live-pulse 2s ease-in-out infinite; }
+@keyframes live-pulse { 50% { opacity: .35; } }

@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.16.0"
+version = "0.17.0"
 description = "A Tauri App"
 authors = ["you"]
 license = ""
@@ -28,7 +28,7 @@ source2-demo = { version = "0.5.10", default-features = false, features = ["cs2"
 ureq = "3.5.0"
 ruzstd = "0.8"
 flate2 = "1"
-windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem", "Win32_System_Power", "Win32_System_Threading", "Win32_System_Diagnostics_Debug", "Win32_System_Diagnostics_ToolHelp"] }
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem", "Win32_System_Power", "Win32_System_Threading", "Win32_System_Diagnostics_Debug", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Performance", "Win32_System_ProcessStatus"] }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-single-instance = "2"

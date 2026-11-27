@@ -26,6 +26,7 @@ import { NightEdit } from "../features/edit/NightEdit";
 import { ReelPanel } from "../features/reel/OtherDemos";
 import { loadReel, saveReel, reelEntry, entryVoice } from "../features/reel/reel";
 import { Home } from "../features/home/Home";
+import { FpsOptimizer } from "../features/fps/FpsOptimizer";
 import { Profile } from "../features/profile/Profile";
 import { Updater, CHECK_EVENT as UPDATE_CHECK } from "../features/update/Updater";
 import { SetupWizard } from "../features/setup/SetupWizard";
@@ -35,6 +36,7 @@ import { Chicken } from "../features/chicken/Chicken";
 import { useChickenPrefs, setChickenPrefs } from "../features/chicken/prefs";
 import shotHudMatch from "../assets/previews/hud-match.webp";
 import shotHudDemo from "../assets/previews/hud-demo.webp";
+import shotPotato from "../assets/previews/gfx-potato.webp";
 import "./highlight-renderer.css";
 import "./theme-lumen.css";
 import { THEMES, readTheme, applyTheme } from "./theme";
@@ -43,13 +45,14 @@ import { version as APP_VERSION } from "../../package.json";
 
 import { tr, trError, getLang, setLang, useLang } from "../i18n";
 // «Эдит» — режим вкладки «Демо» (переключатель «Клипы / Эдит»): трек и видео у них общие
-const TABS = ["Главная", "Демо", "Архив", "Хайлайты", "Профиль", "Очередь", "Библиотека", "Настройки"];
+const TABS = ["Главная", "Демо", "Архив", "Хайлайты", "Профиль", "Очередь", "FPS", "Настройки"];
 const PROFILE_TAB = TABS.indexOf("Профиль");
 const HOME_TAB = TABS.indexOf("Главная");
 const DEMO_TAB = TABS.indexOf("Демо");
 const ARCHIVE_TAB = TABS.indexOf("Архив");
 const HIGHLIGHTS_TAB = TABS.indexOf("Хайлайты");
 const SETTINGS_TAB = TABS.indexOf("Настройки");
+const FPS_TAB = TABS.indexOf("FPS");
 // иконки вкладок: видны в теме Lumen, где вкладки идут меню слева
 const TAB_ICONS = {
   "Главная": "M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z",
@@ -58,7 +61,7 @@ const TAB_ICONS = {
   "Хайлайты": "M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z",
   "Профиль": "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21c1-4 4-6 8-6s7 2 8 6",
   "Очередь": "M4 6h16M4 12h16M4 18h10M18 16l3 2-3 2z",
-  "Библиотека": "M4 4h4v16H4zM10 4h4v16h-4zM16.5 4.5l3.5 1-3.5 14.5-3.5-1z",
+  "FPS": "M3.5 17a8.5 8.5 0 1 1 17 0M12 17l4.2-5.2M6.6 12.4l1 .8M12 8.5V10M17.4 12.4l-1 .8",
   "Настройки": "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z",
 };
 
@@ -130,7 +133,7 @@ const HUD_MODES = [
 
 // Настройки клипа (эффекты, камера, голоса, видео, тайминги) переживают рендер и перезапуск —
 // читаются один раз при старте, пишутся при каждом изменении (cf-clip)
-const FX_DEFAULT = { slowmo: false, damage: false, xray: false, hideDemoUi: true, hud: "full", camVictim: true, replayVoice: false, voiceTail: true, camOrbit: false, killFlash: false, flashColor: "pink", hsZoom: false, rtx: false, ultra: false };
+const FX_DEFAULT = { slowmo: false, damage: false, xray: false, hideDemoUi: true, hud: "full", camVictim: true, replayVoice: false, voiceTail: true, camOrbit: false, killFlash: false, flashColor: "pink", hsZoom: false, rtx: false, ultra: false, potato: false };
 const SAVED_CLIP = (() => {
   try { const v = JSON.parse(localStorage.getItem("cf-clip") || "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; }
 })();
@@ -151,8 +154,11 @@ const GFX = [
     help: "Как в пресете Cinematic: игра записывается через ReShade с эффектами по глубине кадра - мягкие тени по углам, цветной свет от стен, отражения на полу и стеклах, свечение и кино-цвет. Ярко и атмосферно, но на стенах бывает зерно. При «Пересобрать без игры» остается как было записано." },
   { id: "ultra", label: "Мега-качество", sub: "2x разрешение · без зерна и лесенок", badge: "MAX",
     help: "Самая чистая картинка. Игра пишется в 2 раза больше нужного и при сборке уменьшается: нет лесенок на краях крыш и проводах, текстуры четче, шум усредняется. ReShade - свой пресет без зерна: мягкие тени без «отраженного света», спокойные отражения, контраст без дымки." },
+  { id: "potato", label: "Картошка", sub: "без света и теней", badge: "LOL", shot: shotPotato,
+    help: "Графон как в мемных хайлайтах: без света и теней, текстуры мыльные. Включается только на запись, твои настройки CS2 не трогаются." },
 ];
-const gfxOf = (fx) => (fx.rtx ? (fx.ultra ? "ultra" : "cine") : "game");
+const gfxOf = (fx) => (fx.potato ? "potato" : fx.rtx ? (fx.ultra ? "ultra" : "cine") : "game");
+const gfxFx = (id) => ({ rtx: id === "cine" || id === "ultra", ultra: id === "ultra", potato: id === "potato" });
 
 // Где включается виртуальное разрешение больше экрана — по видеокарте (display.rs ultra_check)
 const VSR_STEPS = {
@@ -378,9 +384,12 @@ function Hint({ text, preview, float }) {
     const w = pop.offsetWidth, h = pop.offsetHeight, m = 8;
     const left = r.left + r.width / 2 - w / 2;
     const dx = Math.min(Math.max(left, m), window.innerWidth - w - m) - left;
-    const header = document.querySelector(".topbar")?.getBoundingClientRect().bottom ?? 0;
+    // сверху мешают шапка и полоса шагов, снизу — прилипшая панель «Назад / Далее»
+    const header = Math.max(0, ...[".topbar", ".wz"].map((q) => document.querySelector(q)?.getBoundingClientRect().bottom ?? 0));
+    const footer = document.querySelector(".wz-nav")?.getBoundingClientRect().top ?? window.innerHeight;
+    const above = r.top - 9 - (header + m), below = footer - m - (r.bottom + 9);
     pop.style.setProperty("--dx", `${dx}px`);
-    pop.classList.toggle("is-below", r.top - h - 9 < header + m);
+    pop.classList.toggle("is-below", above < h && below > above);
   };
   return (
     <span className="hint" aria-label={text} onMouseEnter={place}
@@ -682,11 +691,11 @@ export default function HighlightRenderer() {
   const [ffReady, setFfReady] = useState(null);
   const [ffLoad, setFfLoad] = useState(null); // [скачано, всего] МБ, пока качается
   const [ffErr, setFfErr] = useState("");
-  const ensureFfmpeg = useCallback(async () => {
+  const ensureFfmpeg = useCallback(async (hl = paths.hlae) => {
     setFfErr("");
     const un = await listen("ffmpeg-progress", (e) => setFfLoad(e.payload));
     try {
-      const p = await invoke("ensure_ffmpeg", { hlae: paths.hlae });
+      const p = await invoke("ensure_ffmpeg", { hlae: hl });
       setFfReady(p);
       return p;
     } catch (e) { setFfErr(String(e)); throw e; }
@@ -1042,7 +1051,7 @@ const voicePayload = useMemo(() => {
       ...live, voice: "none", trim: true, pad: { before: 1.5, after: 2 }, cutGaps: false, fps: 60, blur: false, merge: { on: false, keep: false },
       music: { ...live.music, enabled: false },
       fx: { ...live.fx, slowmo: false, damage: false, xray: false, camVictim: false, replayVoice: false, voiceTail: false,
-        camOrbit: false, killFlash: false, hsZoom: false, rtx: false, ultra: false },
+        camOrbit: false, killFlash: false, hsZoom: false, rtx: false, ultra: false, potato: false },
     } : live;
     const rl = !o && list ? list : null;
     if (rl && !rl.length) return;
@@ -1057,7 +1066,7 @@ const voicePayload = useMemo(() => {
     const sidOf = (c) => (rl ? c.steamid : pid);
     // кусок эдита: HUD всегда полный (как в TikTok-эдитах), без своих повторов и замедлений —
     // ритм делает монтаж
-    const fxJob = o ? { ...fx, slowmo: false, camVictim: false, camOrbit: false, hsZoom: false, killFlash: false, hud: "full", xray: false } : fx;
+    const fxJob = o ? { ...fx, slowmo: false, camVictim: false, camOrbit: false, hsZoom: false, killFlash: false, hud: "full", xray: false, potato: false } : fx;
     // «Мега-качество» — только у клипов (у эдита своя кино-графика): запись в 2 раза больше, итог чуть качественнее
     const ultraOn = !o && !!fx.rtx && !!fx.ultra;
     const { width, height } = res;
@@ -1106,6 +1115,9 @@ const voicePayload = useMemo(() => {
         else c.drops = chorusDrops({ lrc: music.lrc, start: music.start, clip: c, slowmo: fx.slowmo });
       }
     }
+    // HLAE под текущую CS2: после обновления игры старый HLAE падает при запуске, поэтому перед
+    // записью сверяем версию и при необходимости докачиваем свежую (hlae.rs). Без интернета — что есть
+    const hlae = reuse ? paths.hlae : await ensureHlae().catch(() => paths.hlae);
     // проверка системы: место на диске, пути, драйвер, батарея — ошибки не пускают, предупреждения спрашивают
     {
       const recFps = blur || fxJob.slowmo || sel.some((c) => c.drops?.length) ? fps * 3 : fps;
@@ -1114,7 +1126,7 @@ const voicePayload = useMemo(() => {
       // самый длинный клип: сырьё лежит на диске только у пары клипов сразу, а не у всей записи
       const maxClipSeconds = reuse ? 0 : Math.max(0, ...sel.map((c) => (c.end - c.start) / 64)) * (fxJob.camVictim ? 1.6 : 1);
       const issues = await invoke("preflight", { plan: {
-        out: paths.out, cs2: paths.cs2, hlae: paths.hlae, demo: demoPath0, width: ultraOn && !reuse ? width * 2 : width, height: ultraOn && !reuse ? height * 2 : height, ultra: ultraOn && !reuse, recFps, seconds: secs, maxClipSeconds,
+        out: paths.out, cs2: paths.cs2, hlae, demo: demoPath0, width: ultraOn && !reuse ? width * 2 : width, height: ultraOn && !reuse ? height * 2 : height, ultra: ultraOn && !reuse, recFps, seconds: secs, maxClipSeconds,
         gpu: !!(useGpu && gpuEnc), skins: !reuse && !o && !test && (rl ? reelSkins(rl).length > 0 : !planIsEmpty(skinPlan)),
       } }).catch(() => []);
       const text = (list) => list.map((i) => tr(i.text, ...i.args));
@@ -1139,9 +1151,10 @@ const voicePayload = useMemo(() => {
     done.catch(() => {});
     try {
       // без ffmpeg не запишется и не соберётся ничего — если его ещё нет, сначала скачиваем
-      if (!ffReady) {
+      // HLAE мог только что обновиться: в архиве нового ffmpeg нет — ищем или качаем под его путь
+      if (!ffReady || hlae !== paths.hlae) {
         setStage(tr("скачиваю ffmpeg..."));
-        await ensureFfmpeg();
+        await ensureFfmpeg(hlae);
       }
       // RTX-графика (ReShade с аддоном HLAE): скачивается один раз, ~10 МБ (src-tauri/src/reshade.rs)
       if (!reuse && !o && fx.rtx) {
@@ -1314,7 +1327,7 @@ const voicePayload = useMemo(() => {
       stopped();
       setStage("");
       if (o) demoPath = demoPath0;
-      await invoke("start_render", { job: { demo: demoPath, hlae: paths.hlae, cs2: paths.cs2, out: paths.out,
+      await invoke("start_render", { job: { demo: demoPath, hlae, cs2: paths.cs2, out: paths.out,
         clips: sel, fps, blur, fov, width, height, crf, vmFov: vm.fov, vmX: vm.x, vmY: vm.y, vmZ: vm.z,
         voiceIndices: voicePayload.indices, voiceIndicesHigh: voicePayload.indicesHigh,
         gpuEncoder: useGpu && gpuEnc ? gpuEnc : null, ...fxJob, stamp, startKey, stretch: stretch && aspect === "4:3", merge: o ? false : merge.on, keepParts: merge.keep,
@@ -1364,7 +1377,7 @@ const voicePayload = useMemo(() => {
   const skinCount = Object.keys(skinPlan.weapons || {}).length + (skinPlan.knife ? 1 : 0) + (skinPlan.gloves ? 1 : 0);
   const studioSummary = {
     video: `${res.label} · ${aspect} · ${fps} fps${blur ? " · blur" : ""}`,
-    effects: onList([[fx.rtx && !fx.ultra, tr("кино-графика")], [fx.rtx && fx.ultra, tr("мега-качество")], [fx.slowmo, "slow-mo"], [fx.damage, tr("урон")], [fx.killFlash, tr("вспышка")], [fx.hsZoom, tr("зум на HS")], [fx.xray, "x-ray"], [fx.hud !== "full", fx.hud === "match" ? tr("HUD матча") : tr("килфид")]], tr("без эффектов")),
+    effects: onList([[fx.potato, tr("картошка")], [fx.rtx && !fx.ultra, tr("кино-графика")], [fx.rtx && fx.ultra, tr("мега-качество")], [fx.slowmo, "slow-mo"], [fx.damage, tr("урон")], [fx.killFlash, tr("вспышка")], [fx.hsZoom, tr("зум на HS")], [fx.xray, "x-ray"], [fx.hud !== "full", fx.hud === "match" ? tr("HUD матча") : tr("килфид")]], tr("без эффектов")),
     camera: onList([[fx.camVictim, tr("повтор")], [fx.camOrbit, tr("облет")]], tr("обычная")),
     sound: onList([[voice !== "none", tr("голоса: {0}", tr(VOICE_MODES.find(([k]) => k === voice)?.[1] ?? "").toLowerCase())], [music.enabled && music.path, tr("трек")], [music.enabled && music.path && music.beatFx, tr("в такт")]], tr("звук игры")),
     skins: skinCount ? tr("изменено: {0}", skinCount) : tr("как в демке"),
@@ -1384,7 +1397,9 @@ const voicePayload = useMemo(() => {
   const wzIs = (id) => !wizard || wzId === id;
   // курица-проводник: идёт к «Далее», на последнем шаге — к запуску; без путей стоит с вопросом
   const missingPath = !paths.hlae ? "HLAE?" : !paths.cs2 ? "CS2?" : !paths.out ? tr("папка?") : null;
-  const chickGuide = !wizard || tab !== DEMO_TAB || demoMode !== "clips" || rendering || !wzReady ? null
+  // во время рендера сидит на блоке запуска у «Остановить» и показывает проценты
+  const chickGuide = !wizard || tab !== DEMO_TAB || demoMode !== "clips" || !wzReady ? null
+    : rendering ? (wzId === "render" ? { kind: "watch", sel: ".launch .go--stop" } : null)
     : wzId !== "render" ? { kind: "next", sel: ".wz-nav__next" }
     : missingPath ? { kind: "missing", sel: ".launch__btns .go:last-child", text: missingPath }
     : canRender ? { kind: "render", sel: ".launch__btns .go:last-child" } : null;
@@ -1494,8 +1509,10 @@ const voicePayload = useMemo(() => {
                 return (
                   <button key={g.id} type="button" role="radio" aria-checked={on}
                     className={`gfx-card gfx-card--${g.id} ${on ? "is-on" : ""}`}
-                    onClick={() => setFx({ ...fx, rtx: g.id !== "game", ultra: g.id === "ultra" })}>
-                    <span className="gfx-card__pv" aria-hidden="true"><i /><i /><i /></span>
+                    onClick={() => setFx({ ...fx, ...gfxFx(g.id) })}>
+                    <span className="gfx-card__pv" aria-hidden="true">
+                      {g.shot ? <img src={g.shot} alt="" /> : <><i /><i /><i /></>}
+                    </span>
                     <span className="gfx-card__text">
                       <b>{tr(g.label)}{g.badge && <em className="gfx-card__badge mono">{g.badge}</em>}</b>
                       <span className="dim">{tr(g.sub)}</span>
@@ -1789,6 +1806,10 @@ const voicePayload = useMemo(() => {
             )}
             {error && <p className="mono err">{trError(error)}</p>}
           </Frame>
+        </main>
+      ) : tab === FPS_TAB ? (
+        <main className="grid" key={tab}>
+          <FpsOptimizer Frame={Frame} cs2={paths.cs2} archive={archive} />
         </main>
       ) : tab === SETTINGS_TAB ? (
         <main className="grid" key={tab}>

@@ -146,6 +146,7 @@ function createEngine(set) {
       enter("air"); cluck("cluck"); feathers(2, 0.6);
       return true;
     }
+    if (g.kind === "watch") { enter("watch"); return true; }
     if (g.kind === "missing") { say(g.text || "?", 3400); enter("look", 3200); return true; }
     if (g.kind === "render") {
       enter(Math.random() < 0.6 ? "sit" : "peck", rnd(1800, 3400));
@@ -163,7 +164,7 @@ function createEngine(set) {
     const now = performance.now();
     if (st.perch && !perchHeight()) st.perch = 0; // проводник больше не нужен — спрыгивает
     if (E.live.over) return toAlert();
-    if (E.live.rendering) return enter("watch");
+    if (E.live.rendering) return E.live.guide && guideAct() ? undefined : enter("watch");
     if (now - st.activity > 120000) return enter("sleep");
     if (E.live.guide && guideAct()) return;
     const r = Math.random();
@@ -481,7 +482,7 @@ function Hen({ rendering = false, progress = 0, over = false, error = "", guide 
   const prevStep = useRef(guideStep);
   useEffect(() => {
     const A = api.current, st = A.st;
-    if (!guideKey || rendering || over) return;
+    if (!guideKey || (rendering && guide?.kind !== "watch") || over) return;
     const busy = ["drag", "air", "flee", "hidden", "peek", "angry", "dizzy", "party", "panic", "sleep", "lay"].includes(st.mode);
     if (busy) return;
     if (guideStep !== prevStep.current && st.y === 0) { st.vy = 340; A.cluck("cluck"); }

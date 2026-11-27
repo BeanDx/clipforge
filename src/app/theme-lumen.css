@@ -382,6 +382,9 @@ html[data-theme="lumen"] .grid--wizard > .launch,
 html[data-theme="lumen"] .grid--wizard > .wz-review { animation: wz-in .35s cubic-bezier(.2,.7,.3,1) both; }
 @keyframes wz-in { from { opacity: 0; transform: translateY(10px) scale(.995); } }
 
+/* блок с открытой подсказкой — над прилипшими полосой шагов и «Назад / Далее», иначе они её режут */
+html[data-theme="lumen"] .grid > :has(.hint:hover) { z-index: 7; }
+
 /* «Назад / Далее» прилипают к низу окна */
 html[data-theme="lumen"] .wz-nav {
   position: sticky; bottom: 16px; z-index: 6;
@@ -416,7 +419,9 @@ html[data-theme="lumen"] .launch .go:not(.go--ghost):not(.go--stop) { height: 54
 html[data-theme="lumen"] .studio--step .studio__body { margin-top: 0; }
 
 /* итог перед рендером */
-html[data-theme="lumen"] .wz-review { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+/* карточек всегда шесть (моменты + пять вкладок) — ровная сетка 3x2, на узком окне 2x3 */
+html[data-theme="lumen"] .wz-review { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 760px) { html[data-theme="lumen"] .wz-review { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 html[data-theme="lumen"] .wz-review__item {
   position: relative; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; gap: 2px 12px;
   align-items: center; padding: 14px 16px; text-align: left; border-radius: var(--r);
