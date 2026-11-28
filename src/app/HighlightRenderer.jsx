@@ -45,7 +45,7 @@ import { version as APP_VERSION } from "../../package.json";
 
 import { tr, trError, getLang, setLang, useLang } from "../i18n";
 // «Эдит» — режим вкладки «Демо» (переключатель «Клипы / Эдит»): трек и видео у них общие
-const TABS = ["Главная", "Демо", "Архив", "Хайлайты", "Профиль", "Очередь", "FPS", "Настройки"];
+const TABS = ["Главная", "Демо", "Архив", "Хайлайты", "Профиль", "FPS", "Настройки"];
 const PROFILE_TAB = TABS.indexOf("Профиль");
 const HOME_TAB = TABS.indexOf("Главная");
 const DEMO_TAB = TABS.indexOf("Демо");
@@ -60,7 +60,6 @@ const TAB_ICONS = {
   "Архив": "M3 5h18v4H3zM5 9v10h14V9M10 13h4",
   "Хайлайты": "M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z",
   "Профиль": "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21c1-4 4-6 8-6s7 2 8 6",
-  "Очередь": "M4 6h16M4 12h16M4 18h10M18 16l3 2-3 2z",
   "FPS": "M3.5 17a8.5 8.5 0 1 1 17 0M12 17l4.2-5.2M6.6 12.4l1 .8M12 8.5V10M17.4 12.4l-1 .8",
   "Настройки": "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z",
 };
@@ -548,6 +547,99 @@ export default function HighlightRenderer() {
   // В Lumen вкладка «Клипы» ведёт по шагам: моменты → вкладки настроек клипа → рендер.
   // Новая демка (из архива, с главной, перетаскиванием) начинает с первого шага.
   const wizard = theme === "lumen";
+  // Lumen: у «Настроек» в меню слева — подменю по разделам (заголовки карточек). Клик плавно
+  // прокручивает к разделу, при прокрутке подсвечивается тот, что сейчас наверху.
+  const [subNav, setSubNav] = useState([]);
+  const [subOn, setSubOn] = useState(0);
+  const subRef = useRef(null);
+  const subLock = useRef(false); // после клика держим выбранный пункт, пока пользователь не начнёт листать сам
+  useEffect(() => {
+    if (!wizard || tab !== SETTINGS_TAB) { setSubNav([]); return; }
+    const frames = () => [...document.querySelectorAll("main.grid > .frame")];
+    setSubNav(frames().map((f) => f.querySelector(".frame__head h2")?.firstChild?.textContent?.trim() || ""));
+    setSubOn(0);
+    let raf = 0;
+    const update = (el) => {
+      const list = frames(), ul = subRef.current;
+      if (!list.length || !ul) return;
+      const max = el.scrollHeight - el.clientHeight;
+      const top0 = el === document.scrollingElement ? 0 : el.getBoundingClientRect().top;
+      // где начинается каждый раздел (как при переходе из подменю). Нижние до верха не долистываются
+      // и упираются в конец страницы, карточки в одном ряду начинаются вместе — такие точки
+      // разносим равномерно, чтобы каждый пункт получил свой отрезок прокрутки
+      const s = list.map((f) => Math.min(max, Math.max(0, f.getBoundingClientRect().top - top0 + el.scrollTop - 28)));
+      for (let i = 1; i < s.length; i++) s[i] = Math.max(s[i], s[i - 1]);
+      for (let a = 0; a < s.length;) {
+        let b = a;
+        while (b + 1 < s.length && s[b + 1] === s[a]) b++;
+        const n = b - a + 1;
+        if (n > 1) {
+          if (b + 1 < s.length) for (let m = 0; m < n; m++) s[a + m] += ((s[b + 1] - s[a]) * m) / n; // до следующего раздела
+          else { const prev = a > 0 ? s[a - 1] : 0, v = s[a]; for (let m = 0; m < n; m++) s[a + m] = prev + ((v - prev) * (m + 1)) / n; } // упёрлись в конец
+        }
+        a = b + 1;
+      }
+      // дробный номер раздела по прокрутке: 2.4 — между вторым и третьим
+      const y = el.scrollTop;
+      let f = 0;
+      for (let k = 0; k < s.length - 1; k++) {
+        if (y >= s[k + 1]) f = k + 1;
+        else if (y > s[k]) { f = k + (y - s[k]) / (s[k + 1] - s[k] || 1); break; }
+        else break;
+      }
+      // полоса в подменю доходит до этой точки между центрами пунктов
+      const mid = (li) => li.offsetTop + li.offsetHeight / 2;
+      const items = ul.children, lo = Math.floor(f), hi = Math.min(items.length - 1, lo + 1);
+      if (!items[lo]) return;
+      ul.style.setProperty("--fill", `${mid(items[lo]) + (mid(items[hi]) - mid(items[lo])) * (f - lo)}px`);
+      setSubOn(Math.min(items.length - 1, Math.round(f)));
+    };
+    const onScroll = (e) => {
+      const grid = document.querySelector("main.grid");
+      const el = e.target instanceof Element ? e.target : document.scrollingElement;
+      // своя прокрутка подменю и других списков страницу не листает — их не слушаем
+      if (!grid || !el.contains(grid) || subLock.current) return;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => update(el));
+    };
+    const unlock = () => { subLock.current = false; };
+    document.addEventListener("scroll", onScroll, true);
+    addEventListener("wheel", unlock, { passive: true });
+    addEventListener("keydown", unlock);
+    addEventListener("pointerdown", unlock, true);
+    // начальное положение полосы — когда подменю уже нарисовано
+    const first = requestAnimationFrame(() => {
+      const grid = document.querySelector("main.grid");
+      let el = grid?.parentElement;
+      while (el && el !== document.body && !(el.scrollHeight > el.clientHeight && /auto|scroll/.test(getComputedStyle(el).overflowY))) el = el.parentElement;
+      if (grid) update(el && el !== document.body ? el : document.scrollingElement);
+    });
+    return () => {
+      document.removeEventListener("scroll", onScroll, true);
+      removeEventListener("wheel", unlock);
+      removeEventListener("keydown", unlock);
+      removeEventListener("pointerdown", unlock, true);
+      cancelAnimationFrame(raf); cancelAnimationFrame(first);
+    };
+  }, [wizard, tab, lang]);
+  // активный пункт не прячется за краем подменю, если оно прокручивается
+  useEffect(() => {
+    const ul = subRef.current, li = ul?.children[subOn];
+    if (!li) return;
+    if (li.offsetTop < ul.scrollTop) ul.scrollTo({ top: li.offsetTop - 8, behavior: "smooth" });
+    else if (li.offsetTop + li.offsetHeight > ul.scrollTop + ul.clientHeight) ul.scrollTo({ top: li.offsetTop + li.offsetHeight - ul.clientHeight + 8, behavior: "smooth" });
+  }, [subOn]);
+  const goSub = (i) => {
+    const f = document.querySelectorAll("main.grid > .frame")[i], li = subRef.current?.children[i];
+    if (!f) return;
+    subLock.current = true;
+    f.scrollIntoView({ behavior: "smooth", block: "start" });
+    f.classList.remove("frame--flash");
+    void f.offsetWidth; // перезапуск анимации подсветки
+    f.classList.add("frame--flash");
+    if (li) subRef.current.style.setProperty("--fill", `${li.offsetTop + li.offsetHeight / 2}px`);
+    setSubOn(i);
+  };
   const [step, setStep] = useState(0);
   const [stepDemo, setStepDemo] = useState(null);
   if ((demo?.path ?? null) !== stepDemo) { setStepDemo(demo?.path ?? null); setStep(0); }
@@ -1676,6 +1768,16 @@ const voicePayload = useMemo(() => {
                 <svg className="tabs__ico" viewBox="0 0 24 24" aria-hidden="true"><path d={TAB_ICONS[t]} /></svg>
                 <span className="tabs__label">{tr(t)}</span>
               </button>
+              {tab === i && subNav.length > 0 && (
+                <ul className="subnav" ref={subRef} aria-label={tr(t)}>
+                  {subNav.map((s, k) => (
+                    <li key={k} style={{ "--k": k }}>
+                      <button type="button" className={k === subOn ? "is-on" : k < subOn ? "is-past" : ""}
+                        aria-current={k === subOn ? "location" : undefined} onClick={() => goSub(k)}><span>{s}</span></button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </li>
           ))}
           {ink && <li className="tabs__ink" aria-hidden="true" style={{ "--x": `${ink.left}px`, width: ink.width }} />}

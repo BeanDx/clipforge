@@ -476,3 +476,60 @@ html[data-theme="lumen"] ::-webkit-scrollbar-thumb:hover { background: #3c3a55; 
   html[data-theme="lumen"] .tabs { order: 0; width: auto; overflow: visible; }
   html[data-theme="lumen"] .grid { padding: 16px; }
 }
+
+/* подменю открытой вкладки (разделы «Настроек»): слева дорожка, которая заливается по мере
+   прокрутки страницы (--fill из HighlightRenderer), пройденные пункты — с точкой, текущий — светится */
+.subnav { display: none; }
+html[data-theme="lumen"] .subnav {
+  --fill: 0px;
+  position: relative; display: flex; flex-direction: column; gap: 1px; list-style: none;
+  /* дорожка не у самого края: подменю прокручивается и обрезает всё, что за краем, —
+     свечение точки и полосы должно помещаться внутри */
+  margin: 2px 0 4px 7px; padding: 4px 0 4px 26px;
+  /* в невысоком окне подменю прокручивается само, а не выталкивает статус CS2 вниз */
+  max-height: max(140px, calc(100vh - 470px)); overflow-y: auto; scrollbar-width: none;
+}
+html[data-theme="lumen"] .subnav::-webkit-scrollbar { display: none; }
+html[data-theme="lumen"] .subnav::before,
+html[data-theme="lumen"] .subnav::after {
+  content: ""; position: absolute; left: 14px; top: 0; width: 2px; border-radius: 2px; pointer-events: none;
+}
+html[data-theme="lumen"] .subnav::before { bottom: 0; background: rgba(255,255,255,.07); }
+html[data-theme="lumen"] .subnav::after {
+  height: var(--fill);
+  background: linear-gradient(180deg, rgba(165,150,255,.25), var(--yellow));
+  box-shadow: 0 0 10px rgba(165,150,255,.55);
+  transition: height .18s cubic-bezier(.2,.8,.2,1);
+}
+html[data-theme="lumen"] .subnav li { position: relative; animation: subnav-in .32s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(var(--k) * 28ms); }
+html[data-theme="lumen"] .tabs .subnav button {
+  display: block; width: 100%; padding: 6px 10px; gap: 0; text-align: left;
+  font-size: .8rem; font-weight: 500; color: var(--dim); background: none; box-shadow: none;
+  transition: color .25s, background .25s;
+}
+html[data-theme="lumen"] .subnav button > span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html[data-theme="lumen"] .tabs .subnav button:hover { color: var(--text); background: rgba(255,255,255,.035); }
+/* точка на дорожке; поверх заливки, поэтому рисуется у пункта, а не у списка */
+html[data-theme="lumen"] .tabs .subnav button::before {
+  content: ""; position: absolute; z-index: 1; left: -15.5px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px;
+  border-radius: 50%; background: #121218; border: 1px solid rgba(255,255,255,.14);
+  transform: scale(.55); transition: transform .3s cubic-bezier(.2,.8,.2,1), background .3s, border-color .3s, box-shadow .3s;
+}
+html[data-theme="lumen"] .tabs .subnav button.is-past { color: color-mix(in srgb, var(--dim) 70%, var(--text)); }
+html[data-theme="lumen"] .tabs .subnav button.is-past::before { transform: scale(.7); background: rgba(165,150,255,.7); border-color: transparent; }
+html[data-theme="lumen"] .tabs .subnav button.is-on { color: var(--text); background: rgba(165,150,255,.09); }
+html[data-theme="lumen"] .tabs .subnav button.is-on::before {
+  transform: scale(1.15); background: var(--yellow); border-color: var(--yellow);
+  box-shadow: 0 0 0 3px rgba(165,150,255,.18), 0 0 9px var(--yellow);
+}
+@keyframes subnav-in { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
+
+/* раздел, к которому перешли из подменю: отступ сверху и короткая подсветка рамки */
+html[data-theme="lumen"] .grid > .frame { scroll-margin-top: 28px; }
+html[data-theme="lumen"] .frame--flash { animation: frame-flash 1.2s ease-out .25s; }
+@keyframes frame-flash {
+  0%, 30% { box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 14px 34px rgba(0,0,0,.28), 0 0 0 1px rgba(165,150,255,.55), 0 0 28px rgba(165,150,255,.25); }
+  100% { box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 14px 34px rgba(0,0,0,.28), 0 0 0 1px rgba(165,150,255,0), 0 0 28px rgba(165,150,255,0); }
+}
+@media (max-width: 1100px) { html[data-theme="lumen"] .subnav { display: none; } }
+@media (prefers-reduced-motion: reduce) { html[data-theme="lumen"] .subnav li, html[data-theme="lumen"] .frame--flash { animation: none; } }

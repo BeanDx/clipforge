@@ -6,13 +6,21 @@ export const THEMES = [
 ];
 
 const KEY = "cf-theme";
+// Lumen — тема по умолчанию. Раньше по умолчанию была «Тактика», и она записывалась при каждом
+// запуске, поэтому всех один раз переводим на Lumen; вернуть «Тактику» можно в настройках
+const LUMEN_DEFAULT = "cf-theme-lumen-default";
+const DEFAULT = "lumen";
 
 export function readTheme() {
   try {
+    if (!localStorage.getItem(LUMEN_DEFAULT)) {
+      localStorage.setItem(LUMEN_DEFAULT, "1");
+      localStorage.setItem(KEY, DEFAULT);
+    }
     const v = localStorage.getItem(KEY);
-    return THEMES.some((t) => t.id === v) ? v : "hud";
+    return THEMES.some((t) => t.id === v) ? v : DEFAULT;
   } catch {
-    return "hud";
+    return DEFAULT;
   }
 }
 

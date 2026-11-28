@@ -6,6 +6,7 @@ import Overlay from "./windows/overlay/Overlay";
 import Toast from "./windows/toast/Toast";
 import { installNativeGuards } from "./lib/nativeGuards";
 import { installIdle } from "./lib/idle";
+import { readTheme } from "./app/theme";
 import "./index.css";
 
 installNativeGuards();
@@ -18,7 +19,7 @@ try { label = getCurrentWindow().label; } catch { /* не в Tauri */ }
 if (label === "main") installIdle();
 // оформление ставим до первого кадра, чтобы окно не мигало старой темой (src/app/theme.js)
 if (label === "main") {
-  try { if (localStorage.getItem("cf-theme") === "lumen") document.documentElement.dataset.theme = "lumen"; } catch { /* без localStorage */ }
+  document.documentElement.dataset.theme = readTheme();
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(
